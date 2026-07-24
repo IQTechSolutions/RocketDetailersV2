@@ -47,7 +47,9 @@ public sealed class MetaSyncJob(
         var o = options.Value;
         var now = clock.UtcNow;
         var today = DateOnly.FromDateTime(now.UtcDateTime);
-        var yesterday = today.AddDays(-1);
+        // Window is configurable: default 1 = yesterday+today (cheap, for the recurring
+        // job); a larger InsightsLookbackDays powers a one-off spend backfill.
+        var since = today.AddDays(-Math.Max(1, o.InsightsLookbackDays));
 
         var campaignToClient = (await db.IdentityLinks
                 .Where(l => l.System == ExternalSystem.Meta && l.Kind == LinkKind.Campaign && l.InvalidatedAt == null)
@@ -82,10 +84,10 @@ public sealed class MetaSyncJob(
             proj.SourceSyncedAt = now;
         }
 
-        // --- Insights: yesterday + today, daily granularity.
-        var insights = await meta.GetDailyInsightsAsync(o.AdAccountId, yesterday, today, ct);
+        // --- Insights: [since .. today], daily granularity.
+        var insights = await meta.GetDailyInsightsAsync(o.AdAccountId, since, today, ct);
         var insightProjections = await db.MetaInsightsDaily
-            .Where(i => i.Date >= yesterday)
+            .Where(i => i.Date >= since)
             .ToDictionaryAsync(i => (i.CampaignId, i.Date), ct);
         foreach (var insight in insights)
         {

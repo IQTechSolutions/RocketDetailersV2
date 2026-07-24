@@ -18,10 +18,12 @@ public static class SyncRunner
     public static async Task<int> RunAsync(string[] args)
     {
         var config = new ConfigurationBuilder()
+            .AddUserSecrets(System.Reflection.Assembly.GetExecutingAssembly(), optional: true)
             .AddEnvironmentVariables()
             .Build();
 
-        var conn = config.GetConnectionString("RocketDetailers")
+        var conn = Environment.GetEnvironmentVariable("RD_CONN")
+            ?? config.GetConnectionString("RocketDetailers")
             ?? "Server=(localdb)\\MSSQLLocalDB;Database=RocketDetailers;Trusted_Connection=True;MultipleActiveResultSets=true;TrustServerCertificate=True";
 
         var services = new ServiceCollection();

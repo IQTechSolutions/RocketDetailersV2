@@ -27,6 +27,8 @@ public sealed class MetaOptions
     public string BaseUrl { get; set; } = "https://graph.facebook.com/v23.0";
     /// <summary>Insights spend arrives in the ad account's currency with no per-row currency field.</summary>
     public string AccountCurrency { get; set; } = "USD";
+    /// <summary>How many days back the daily-insights sweep covers (1 = yesterday+today). Keep small for the recurring job; raise for a one-off backfill.</summary>
+    public int InsightsLookbackDays { get; set; } = 1;
 }
 
 public sealed class GhlLocationOptions
