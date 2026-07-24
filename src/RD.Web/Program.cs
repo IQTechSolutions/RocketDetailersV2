@@ -28,6 +28,7 @@ builder.Services.AddScoped<CockpitStateService>();
 builder.Services.AddScoped<OutboxActionService>();
 builder.Services.AddScoped<ClientDirectoryService>();
 builder.Services.AddScoped<ReconciliationService>();
+builder.Services.AddScoped<MappingWizardService>();
 
 // Lane A gateways + sync jobs + the policy heartbeat + M2 enforcement services
 // (dispatcher, approval CAS, kill switch, state builder, stager).
