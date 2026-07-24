@@ -25,6 +25,10 @@ if (args.Length > 0 && args[0].Equals("link-meta", StringComparison.OrdinalIgnor
 if (args.Length > 0 && args[0].Equals("link-ghl", StringComparison.OrdinalIgnoreCase))
     return await GhlLinkRunner.RunAsync(args);
 
+// "mark-master" verb: set AccountType=Master from the sheet's "Master Ad Account?" column (see MarkMasterRunner).
+if (args.Length > 0 && args[0].Equals("mark-master", StringComparison.OrdinalIgnoreCase))
+    return await MarkMasterRunner.RunAsync(args);
+
 // Seed importer: one-time load of the reconciliation spreadsheet into SQL.
 // Disposable by design (design doc: "one-time spreadsheet import code").
 // Usage: dotnet run --project src/RD.Tools.Import -- "<xlsx path>" [--conn "<connection string>"] [--force]
