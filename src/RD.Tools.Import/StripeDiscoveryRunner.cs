@@ -26,13 +26,13 @@ namespace RD.Tools.Import;
 /// <see cref="EnforcementMode.Shadow"/>. Every member customer + subscription is
 /// linked; every human-judgment exception becomes an <see cref="InvestigationItem"/>.
 ///
-/// It NEVER auto-decides identity: a multi-member cluster is persisted pre-grouped
-/// but carries a "CONFIRM or SPLIT" investigation, because clustering both
-/// over-groups (common names) and can't bridge the Stripe-person-name vs
-/// business-name gap on its own. That gap is closed deterministically by the
-/// --crosswalk sheet (the "All Clients" master), which maps Stripe customer id →
-/// business name; where a member id is found there, the business name comes from
-/// the sheet instead of the person name.
+/// The CUSTOMER NAME is the client's identity and the reconciliation key; the
+/// sheet's business-name column is a CATEGORY label only (carried in Notes), never
+/// the identity. Clustering NEVER auto-decides: a multi-member cluster is persisted
+/// pre-grouped but carries a "CONFIRM or SPLIT" investigation, because a shared
+/// normalized customer name can genuinely belong to two different clients. The
+/// --crosswalk sheet ("All Clients" master) maps Stripe customer id → category
+/// (and, in the link verbs, → Meta campaign / GHL contact / Master flag).
 ///
 /// Dry-run by default. Credentials: Stripe:ApiKey from user-secrets or env
 /// (Stripe__ApiKey). Connection: RD_CONN, or ConnectionStrings:RocketDetailers.
@@ -85,9 +85,9 @@ public static class StripeDiscoveryRunner
         // Optional deterministic person→business bridge from the master sheet.
         var crosswalk = LoadCrosswalk(crosswalkPath);
         if (crosswalkPath is not null)
-            Console.WriteLine($"[discover] crosswalk: {crosswalk.Count} Stripe-customer→business mappings from {Path.GetFileName(crosswalkPath)}.");
+            Console.WriteLine($"[discover] crosswalk: {crosswalk.Count} Stripe-customer→category mappings from {Path.GetFileName(crosswalkPath)}.");
         else
-            Console.WriteLine("[discover] crosswalk: none (business names will be flagged for confirmation).");
+            Console.WriteLine("[discover] crosswalk: none (no category labels — client identity is always the customer name).");
 
         Console.WriteLine("[discover] pulling live Stripe customers + subscriptions (read-only)…");
         IReadOnlyList<StripeCustomerDto> customers;
@@ -134,16 +134,17 @@ public static class StripeDiscoveryRunner
             var email = members.Select(m => m.Email).FirstOrDefault(e => e is not null);
             var country = members.Select(m => m.Country).FirstOrDefault(c => c is { Length: <= 2 });
 
-            // Business name: deterministic from the sheet if any member id is mapped, else the person name (flagged).
-            var sheetName = members.Select(m => crosswalk.TryGetValue(m.Id, out var b) ? b : null).FirstOrDefault(b => b is not null);
-            var businessName = Clamp(sheetName ?? cluster.DisplayName, 200)!;
-            if (sheetName is not null) fromSheet++;
+            // The CUSTOMER NAME is the client's identity and the reconciliation key
+            // (owner-confirmed). The sheet's business-name column is a CATEGORY label,
+            // not the identity — carry it in Notes, never as the client name.
+            var category = members.Select(m => crosswalk.TryGetValue(m.Id, out var b) ? b : null).FirstOrDefault(b => b is not null);
+            if (category is not null) fromSheet++;
 
             var client = new Client
             {
                 Id = Guid.NewGuid(),
-                BusinessName = businessName,
-                ContactName = Clamp(cluster.DisplayName, 200), // the Stripe person name
+                BusinessName = Clamp(cluster.DisplayName, 200)!, // customer name = the client identity + join key
+                ContactName = Clamp(cluster.DisplayName, 200),
                 Email = email,
                 Country = country,
                 CurrencyCode = currency,
@@ -151,8 +152,8 @@ public static class StripeDiscoveryRunner
                 AccountType = AccountType.Own, // Master is a human call — never inferred.
                 EnforcementMode = EnforcementMode.Shadow,
                 Notes = $"Discovered from live Stripe {now:yyyy-MM-dd}. {members.Count} Stripe customer(s): " +
-                        $"{string.Join(", ", members.Take(12).Select(m => m.Id))}{(members.Count > 12 ? $" (+{members.Count - 12} more)" : "")}. " +
-                        (sheetName is not null ? "Business name from master sheet." : "Business name = Stripe person name — confirm against sheet."),
+                        $"{string.Join(", ", members.Take(12).Select(m => m.Id))}{(members.Count > 12 ? $" (+{members.Count - 12} more)" : "")}." +
+                        (category is not null ? $" Category: {category}." : ""),
                 CreatedAt = now,
             };
             db.Clients.Add(client);
@@ -200,10 +201,6 @@ public static class StripeDiscoveryRunner
                     $"Signals: {(cluster.Signals.Count > 0 ? string.Join("; ", cluster.Signals) : "n/a")}. Members: {roster}.");
             }
 
-            if (sheetName is null)
-                Flag(InvestigationKind.UnmappedIdentity,
-                    $"Confirm business name for '{cluster.DisplayName}' <{email ?? "no email"}> against the business-name sheet (Stripe carries the person name).");
-
             if (memberSubs.Count == 0) { Flag(InvestigationKind.UnmappedIdentity, "No subscription on any customer in this cluster — inactive, prospect, or stray account?"); noSub++; }
             if (members.Any(m => m.Delinquent)) { Flag(InvestigationKind.ExternallyPausedPayment, "At least one Stripe customer here is delinquent (unpaid invoice)."); delinquent++; }
             if (currency != "USD") { Flag(InvestigationKind.NonUsdCurrency, $"Bills in {currency}; v1 policy is USD-only."); nonUsd++; }
@@ -217,7 +214,7 @@ public static class StripeDiscoveryRunner
 
         Console.WriteLine($"[discover] candidates: {created} new ({singles} single, {multi} multi-customer), {skipped} skipped (already linked)" +
                           (activeOnly ? $", {filteredInactive} filtered (no subscription)." : "."));
-        Console.WriteLine($"[discover] links: {custLinks} Stripe customers, {subLinks} subscriptions.  trials: {trials}.  business names from sheet: {fromSheet}.");
+        Console.WriteLine($"[discover] links: {custLinks} Stripe customers, {subLinks} subscriptions.  trials: {trials}.  categories from sheet: {fromSheet}.");
         Console.WriteLine($"[discover] flags: {flags} total  —  cluster-to-confirm:{multi}  no-subscription:{noSub}  delinquent:{delinquent}  non-USD:{nonUsd}");
 
         if (commit)
@@ -243,7 +240,7 @@ public static class StripeDiscoveryRunner
         return File.Exists(def) ? def : null;
     }
 
-    /// <summary>Stripe customer id → business name, from the master sheet (cols "Stripe Customer ID"/"...ID 2" → "Client Business Name").</summary>
+    /// <summary>Stripe customer id → category label, from the master sheet (cols "Stripe Customer ID"/"...ID 2" → "Client Business Name", used as a category, not the identity).</summary>
     private static Dictionary<string, string> LoadCrosswalk(string? path)
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
