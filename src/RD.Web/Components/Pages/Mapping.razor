@@ -1,0 +1,154 @@
+@page "/mapping"
+@using RD.Domain
+@using RD.Web.Components.Mapping
+@using RD.Web.Components.Dialogs
+@inject MappingWizardService Wizard
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<PageTitle>Mapping wizard — Rocket Detailer Control Plane</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+    <MudText Typo="Typo.h5">Mapping wizard</MudText>
+    <HelpHint Text="Verify which external identities control each client's ads before the engine is allowed to act on them. This is a control, not a form: every link shows its evidence and the blast radius of trusting it. Verifying unlocks the Shadow → Assist promotion." />
+</MudStack>
+
+<MudGrid Spacing="3">
+    <MudItem xs="12" md="4">
+        @if (_rows is null)
+        {
+            <MudPaper Elevation="1" Class="pa-3"><GridSkeleton Rows="6" /></MudPaper>
+        }
+        else
+        {
+            <MappingClientList Rows="_rows" SelectedId="_selectedId" OnSelect="SelectClient" />
+        }
+    </MudItem>
+
+    <MudItem xs="12" md="8">
+        @if (_selectedId is null)
+        {
+            <MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
+                <EmptyState Icon="@Icons.Material.Outlined.TouchApp"
+                            Title="Pick a client to map"
+                            Hint="Choose a client on the left to see its required links, the vendor evidence behind each one, and the blast radius of verifying the mapping." />
+            </MudPaper>
+        }
+        else if (_loadingDetail)
+        {
+            <MudPaper Elevation="1" Class="pa-4"><GridSkeleton Rows="8" /></MudPaper>
+        }
+        else if (_detail is null)
+        {
+            <MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
+                <EmptyState Icon="@Icons.Material.Outlined.PersonOff"
+                            Title="Client not found"
+                            Hint="This client doesn't exist, or the link is stale." />
+            </MudPaper>
+        }
+        else
+        {
+            <MappingDetailPanel Detail="_detail" OnLink="HandleLink" OnVerify="HandleVerify" OnPromote="HandlePromote" />
+        }
+    </MudItem>
+</MudGrid>
+
+@code {
+    [SupplyParameterFromQuery(Name = "clientId")]
+    public Guid? ClientIdParam { get; set; }
+
+    private List<UnverifiedClientRow>? _rows;
+    private Guid? _selectedId;
+    private ClientMappingDetail? _detail;
+    private bool _loadingDetail;
+    private bool _listLoaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!_listLoaded)
+        {
+            _rows = await Wizard.GetUnverifiedClients();
+            _listLoaded = true;
+        }
+
+        // Deep-link support: /mapping?clientId=… lands directly on a client.
+        if (ClientIdParam != _selectedId)
+        {
+            _selectedId = ClientIdParam;
+            await LoadDetailAsync();
+        }
+    }
+
+    private void SelectClient(Guid clientId)
+    {
+        // Keep the selection in the URL so the view is shareable and back/forward works.
+        Nav.NavigateTo(Nav.GetUriWithQueryParameter("clientId", clientId.ToString()));
+    }
+
+    private async Task LoadDetailAsync()
+    {
+        if (_selectedId is null)
+        {
+            _detail = null;
+            return;
+        }
+        _loadingDetail = true;
+        _detail = null;
+        StateHasChanged();
+        _detail = await Wizard.GetClientMappingDetail(_selectedId.Value);
+        _loadingDetail = false;
+    }
+
+    private async Task ReloadAsync()
+    {
+        _rows = await Wizard.GetUnverifiedClients();
+        await LoadDetailAsync();
+    }
+
+    private async Task HandleLink(RequiredSlot slot)
+    {
+        if (_selectedId is null || _detail is null) return;
+
+        var suggestions = await Wizard.SuggestLinks(_selectedId.Value, slot.System, slot.Kind);
+        var parameters = new DialogParameters<LinkPickerDialog>
+        {
+            { d => d.ClientName, _detail.BusinessName },
+            { d => d.Label, slot.Label },
+            { d => d.HelpText, slot.HelpText },
+            { d => d.Suggestions, suggestions },
+        };
+        var dialog = await Dialogs.ShowAsync<LinkPickerDialog>(null, parameters);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not string externalId || string.IsNullOrWhiteSpace(externalId))
+            return;
+
+        var write = await Wizard.AddOrReplaceLink(_selectedId.Value, slot.System, slot.Kind, externalId);
+        Snackbar.Add(write.Message, write.Ok ? Severity.Success : Severity.Error);
+        await ReloadAsync();
+    }
+
+    private async Task HandleVerify(string? evidenceNote)
+    {
+        if (_selectedId is null) return;
+
+        var write = await Wizard.VerifyMapping(_selectedId.Value, evidenceNote, verifiedBy: "operator", blastRadiusAcknowledged: true);
+        Snackbar.Add(write.Message, write.Ok ? Severity.Success : Severity.Warning);
+        await ReloadAsync();
+    }
+
+    private async Task HandlePromote()
+    {
+        if (_selectedId is null || _detail is null) return;
+
+        var parameters = new DialogParameters<PromoteToAssistDialog> { { d => d.ClientName, _detail.BusinessName } };
+        var dialog = await Dialogs.ShowAsync<PromoteToAssistDialog>(null, parameters);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not true)
+            return;
+
+        var write = await Wizard.PromoteToAssist(_selectedId.Value);
+        Snackbar.Add(write.Message, write.Ok ? Severity.Success : Severity.Warning);
+        await ReloadAsync();
+    }
+}

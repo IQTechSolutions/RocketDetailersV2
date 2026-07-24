@@ -1,0 +1,170 @@
+@using RD.Domain
+@* Right rail: one client's mapping AS A CONTROL — evidence per required link, blast-radius callout, a required acknowledgement, and the Verify / Promote steps. Pure-rendered from Detail so it unit-tests with a stubbed detail (no DB). *@
+
+<MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap" Class="mb-1">
+        <MudText Typo="Typo.h6">@Detail.BusinessName</MudText>
+        <ModeBadge Mode="@Detail.Mode" />
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                 Color="@(Detail.AccountType == AccountType.Master ? Color.Primary : Color.Default)">@Detail.AccountType account</MudChip>
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@Detail.CurrencyCode</MudChip>
+        <HelpHint Text="This is the enforcement control for one client. Each required link shows the vendor facts it resolves to; verify only once you're sure these ids point at the right business's ads." />
+    </MudStack>
+
+    @if (Detail.HasCurrentVerification)
+    {
+        <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mb-2">
+            <MudIcon Icon="@Icons.Material.Filled.Verified" Size="Size.Small" Style="vertical-align:middle;" Color="Color.Success" />
+            Verified @Detail.LastVerifiedAt?.ToString("yyyy-MM-dd HH:mm") UTC by @Detail.LastVerifiedBy
+        </MudText>
+    }
+    else
+    {
+        <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mb-2">
+            Not yet verified — verification is what unlocks Assist mode.
+        </MudText>
+    }
+
+    @* ---- Blast radius: the prominent control callout. ---- *@
+    <MudAlert Severity="@(Detail.BlastRadius.HasLiveSpend ? Severity.Warning : Severity.Info)"
+              Variant="Variant.Filled" Class="mb-4" Icon="@Icons.Material.Filled.Bolt" NoIcon="false">
+        <MudText Typo="Typo.body2" Style="font-weight:600;">@Detail.BlastRadius.Headline</MudText>
+        @if (Detail.LiveCampaigns.Any())
+        {
+            <MudText Typo="Typo.caption" Class="d-block mt-1">
+                @foreach (var campaign in Detail.LiveCampaigns)
+                {
+                    <span class="d-block">• @campaign.DisplayName — @Human.MoneyKpi(campaign.RecentDailySpend, campaign.Currency)/day</span>
+                }
+            </MudText>
+        }
+    </MudAlert>
+
+    @* ---- Required links, each with evidence + link/replace. ---- *@
+    <MudText Typo="Typo.subtitle1" Class="mb-2">Required links</MudText>
+    <MudStack Spacing="2" Class="mb-4">
+        @foreach (var slot in Detail.RequiredSlots)
+        {
+            <MudPaper Outlined="true" Elevation="0" Class="pa-3">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                    @if (slot.Present)
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
+                    }
+                    else
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.ErrorOutline" Color="Color.Error" Size="Size.Small" />
+                    }
+                    <div style="flex:1;min-width:14rem;">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudText Typo="Typo.body2" Style="font-weight:600;">@slot.Label</MudText>
+                            <HelpHint Text="@slot.HelpText" />
+                            @if (slot.Present && slot.Active!.Verified)
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success">verified</MudChip>
+                            }
+                        </MudStack>
+                        @if (slot.Present)
+                        {
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">
+                                <code style="font-size:.72rem;">@slot.Active!.ExternalId</code> · v@slot.Active!.LinkVersion
+                            </MudText>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">@slot.Active!.Evidence</MudText>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">Not linked — the engine is blind here until it is.</MudText>
+                        }
+                    </div>
+                    <MudButton Size="Size.Small"
+                               Variant="@(slot.Present ? Variant.Outlined : Variant.Filled)"
+                               Color="@(slot.Present ? Color.Default : Color.Primary)"
+                               StartIcon="@(slot.Present ? Icons.Material.Filled.SwapHoriz : Icons.Material.Filled.AddLink)"
+                               OnClick="@(() => OnLink.InvokeAsync(slot))">
+                        @(slot.Present ? "Replace" : "Link")
+                    </MudButton>
+                </MudStack>
+            </MudPaper>
+        }
+    </MudStack>
+
+    @* ---- Verify step: acknowledgement is the confirm gate. ---- *@
+    <MudPaper Outlined="true" Elevation="0" Class="pa-3 mb-3">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+            <MudText Typo="Typo.subtitle2">Verify this mapping</MudText>
+            <HelpHint Text="Verification writes an audit record pinning these exact link versions and stamps the links as verified. Changing any required link later invalidates this and drops the client back to Shadow automatically." />
+        </MudStack>
+
+        @if (!Detail.AllRequiredPresent)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2">
+                Link all four required identities above before you can verify.
+            </MudAlert>
+        }
+
+        <MudTextField T="string" @bind-Value="_evidenceNote" Lines="2" Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Label="Evidence note (optional)"
+                      HelperText="How did you confirm these ids are the right client's? Written to the audit trail." />
+
+        <MudCheckBox T="bool" @bind-Value="_acknowledged" Color="Color.Primary" Dense="true" Class="mt-2"
+                     Label="I've verified these links control the right client's ads" />
+
+        <MudButton Class="mt-2" Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.VerifiedUser"
+                   Disabled="@(!Detail.AllRequiredPresent || !_acknowledged)"
+                   OnClick="Verify">
+            Verify mapping
+        </MudButton>
+    </MudPaper>
+
+    @* ---- Promotion: only after a current verification exists. ---- *@
+    @if (Detail.HasCurrentVerification)
+    {
+        <MudPaper Outlined="true" Elevation="0" Class="pa-3">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+                <MudText Typo="Typo.subtitle2">Enforcement ladder</MudText>
+                <HelpHint Text="@Human.LadderExplanation" />
+            </MudStack>
+            @if (Detail.Mode == EnforcementMode.Shadow)
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mb-2">
+                    Mapping verified — this client can climb from Shadow to Assist. Auto is earned later by clean days, never here.
+                </MudText>
+                <MudButton Variant="Variant.Filled" Color="Color.Secondary"
+                           StartIcon="@Icons.Material.Filled.TrendingUp"
+                           OnClick="@(() => OnPromote.InvokeAsync())">
+                    Promote to Assist mode
+                </MudButton>
+            }
+            else
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">
+                    Already in @Detail.Mode.ToString() mode. @Detail.Mode.Description()
+                </MudText>
+            }
+        </MudPaper>
+    }
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public ClientMappingDetail Detail { get; set; } = default!;
+
+    /// <summary>Raised with the slot to link/replace — the page loads suggestions and opens the picker.</summary>
+    [Parameter] public EventCallback<RequiredSlot> OnLink { get; set; }
+
+    /// <summary>Raised with the evidence note when the operator verifies (acknowledgement already gated by the button).</summary>
+    [Parameter] public EventCallback<string?> OnVerify { get; set; }
+
+    /// <summary>Raised when the operator asks to promote to Assist — the page confirms via dialog.</summary>
+    [Parameter] public EventCallback OnPromote { get; set; }
+
+    private bool _acknowledged;
+    private string? _evidenceNote;
+
+    private async Task Verify()
+    {
+        await OnVerify.InvokeAsync(_evidenceNote);
+        // Reset the gate so a stale acknowledgement can't ride into the next verify.
+        _acknowledged = false;
+    }
+}

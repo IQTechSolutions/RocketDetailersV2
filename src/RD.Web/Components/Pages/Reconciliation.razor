@@ -62,6 +62,13 @@
                             <MudLink Href="@($"/clients/{context.Item.ClientId}")" Typo="Typo.body2">
                                 @(context.Item.ClientName ?? "View client")
                             </MudLink>
+                            @* Mapping gaps and import conflicts are fixed in the mapping wizard — deep-link straight to this client. *@
+                            @if (context.Item.Kind is InvestigationKind.UnmappedIdentity or InvestigationKind.ImportConflict)
+                            {
+                                <MudLink Href="@($"/mapping?clientId={context.Item.ClientId}")" Typo="Typo.caption" Class="d-block">
+                                    → Fix mapping
+                                </MudLink>
+                            }
                         }
                         else
                         {

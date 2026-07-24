@@ -1,0 +1,86 @@
+@using RD.Domain
+@* Pick an external id for a required link: fuzzy suggestions from unclaimed projections, or a manual id. Returns the chosen external id string. *@
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Link @Label for @ClientName</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">@HelpText</MudText>
+
+        <MudText Typo="Typo.subtitle2" Class="mb-1">Suggestions</MudText>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mb-2">
+            Best-effort matches from records not yet linked to any client. These are suggestions — verification is what makes a link real.
+        </MudText>
+
+        @if (Suggestions.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                No unclaimed @Label.ToLowerInvariant() records to suggest — enter the external id manually below.
+            </MudAlert>
+        }
+        else
+        {
+            <MudList T="string" Class="mb-3" Dense="true">
+                @foreach (var suggestion in Suggestions)
+                {
+                    <MudListItem T="string" OnClick="@(() => Choose(suggestion.ExternalId))"
+                                 Icon="@Icons.Material.Filled.AddLink">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                            <div style="flex:1;min-width:12rem;">
+                                <MudText Typo="Typo.body2" Style="font-weight:600;">@suggestion.Label</MudText>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">
+                                    <code style="font-size:.72rem;">@suggestion.ExternalId</code>
+                                    @if (!string.IsNullOrEmpty(suggestion.Detail))
+                                    {
+                                        <span> · @suggestion.Detail</span>
+                                    }
+                                </MudText>
+                            </div>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                     Color="@(suggestion.Score >= 0.6 ? Color.Success : suggestion.Score >= 0.25 ? Color.Info : Color.Default)">
+                                @suggestion.Rationale
+                            </MudChip>
+                        </MudStack>
+                    </MudListItem>
+                }
+            </MudList>
+        }
+
+        <MudDivider Class="my-3" />
+
+        <MudText Typo="Typo.subtitle2" Class="mb-1">Or enter the external id</MudText>
+        <MudTextField T="string" @bind-Value="_manualId" Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Placeholder="@Placeholder" Immediate="true"
+                      HelperText="Paste the exact id from the vendor dashboard if it isn't suggested above." />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="@string.IsNullOrWhiteSpace(_manualId)"
+                   OnClick="@(() => Choose(_manualId!))">
+            Link this id
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    [Parameter, EditorRequired] public string ClientName { get; set; } = "";
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter] public string HelpText { get; set; } = "";
+    [Parameter] public IReadOnlyList<LinkSuggestion> Suggestions { get; set; } = [];
+
+    private string? _manualId;
+
+    private string Placeholder => Label switch
+    {
+        var l when l.Contains("subscription", StringComparison.OrdinalIgnoreCase) => "sub_…",
+        var l when l.Contains("customer", StringComparison.OrdinalIgnoreCase) => "cus_…",
+        var l when l.Contains("campaign", StringComparison.OrdinalIgnoreCase) => "23851…",
+        _ => "external id",
+    };
+
+    private void Choose(string externalId) => Dialog!.Close(DialogResult.Ok(externalId.Trim()));
+}

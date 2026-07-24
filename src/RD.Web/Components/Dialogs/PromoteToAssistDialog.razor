@@ -1,0 +1,32 @@
+@* Confirms the Shadow → Assist promotion, spelling out exactly what Assist does (and doesn't) mean. *@
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Promote @ClientName to Assist mode?</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-3">
+            Assist is the middle rung of the ladder. The engine <b>proposes</b> actions (pause, resume, dunning);
+            a human <b>approves</b> each one before anything touches Stripe, Meta or GHL. There is still
+            <b>no autonomous action</b> — that's Auto, earned later by clean days.
+        </MudAlert>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            This is allowed because the mapping is verified and all four required links are present. If any required
+            link changes later, this client drops straight back to Shadow automatically.
+        </MudText>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Secondary"
+                   StartIcon="@Icons.Material.Filled.TrendingUp"
+                   OnClick="@(() => Dialog!.Close(DialogResult.Ok(true)))">
+            Promote to Assist
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    [Parameter, EditorRequired] public string ClientName { get; set; } = "";
+}
