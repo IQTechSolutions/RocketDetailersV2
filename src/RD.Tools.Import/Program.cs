@@ -9,6 +9,10 @@ using RD.Tools.Import;
 if (args.Length > 0 && args[0].Equals("sync", StringComparison.OrdinalIgnoreCase))
     return await SyncRunner.RunAsync(args);
 
+// "seed-user" verb: create/reset an admin directly (see SeedUserRunner).
+if (args.Length > 0 && args[0].Equals("seed-user", StringComparison.OrdinalIgnoreCase))
+    return await SeedUserRunner.RunAsync(args);
+
 // Seed importer: one-time load of the reconciliation spreadsheet into SQL.
 // Disposable by design (design doc: "one-time spreadsheet import code").
 // Usage: dotnet run --project src/RD.Tools.Import -- "<xlsx path>" [--conn "<connection string>"] [--force]
