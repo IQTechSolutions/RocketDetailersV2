@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using RD.Infrastructure;
 
@@ -11,9 +12,11 @@ using RD.Infrastructure;
 namespace RD.Infrastructure.Migrations
 {
     [DbContext(typeof(RdDbContext))]
-    partial class RdDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260724213326_InvestigationExternalId")]
+    partial class InvestigationExternalId
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -201,18 +204,10 @@ namespace RD.Infrastructure.Migrations
                         .HasMaxLength(10)
                         .HasColumnType("nvarchar(10)");
 
-                    b.Property<string>("ArrangementStatus")
-                        .IsRequired()
-                        .HasMaxLength(15)
-                        .HasColumnType("nvarchar(15)");
-
                     b.Property<string>("BusinessName")
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
-
-                    b.Property<int?>("CadenceDays")
-                        .HasColumnType("int");
 
                     b.Property<string>("ContactName")
                         .HasMaxLength(200)
@@ -244,10 +239,6 @@ namespace RD.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(10)
                         .HasColumnType("nvarchar(10)");
-
-                    b.Property<decimal?>("ExpectedAmount")
-                        .HasPrecision(19, 4)
-                        .HasColumnType("decimal(19,4)");
 
                     b.Property<string>("Notes")
                         .HasColumnType("nvarchar(max)");

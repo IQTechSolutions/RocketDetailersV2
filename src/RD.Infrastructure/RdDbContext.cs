@@ -55,6 +55,8 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
             e.Property(x => x.ContractType).HasConversion<string>().HasMaxLength(10);
             e.Property(x => x.AccountType).HasConversion<string>().HasMaxLength(10);
             e.Property(x => x.EnforcementMode).HasConversion<string>().HasMaxLength(10);
+            e.Property(x => x.ExpectedAmount).HasPrecision(19, 4);
+            e.Property(x => x.ArrangementStatus).HasConversion<string>().HasMaxLength(15);
             e.Property(x => x.RowVersion).IsRowVersion();
             e.HasOne(x => x.Package).WithMany().HasForeignKey(x => x.PackageId).OnDelete(DeleteBehavior.Restrict);
         });
@@ -131,6 +133,8 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
             e.Property(x => x.Kind).HasConversion<string>().HasMaxLength(30);
             e.Property(x => x.Status).HasConversion<string>().HasMaxLength(10);
             e.Property(x => x.Detail).HasMaxLength(1000);
+            e.Property(x => x.System).HasConversion<string>().HasMaxLength(10);
+            e.Property(x => x.ExternalId).HasMaxLength(200);
             e.Property(x => x.ResolvedBy).HasMaxLength(100);
             e.Property(x => x.ResolutionNote).HasMaxLength(1000);
             e.HasIndex(x => new { x.Status, x.Kind });

@@ -45,23 +45,34 @@ public static class MarkMasterRunner
             .Select(l => new { l.ClientId, l.ExternalId })
             .ToListAsync(ct);
 
-        var masterClientIds = custLinks
+        var sheetMasterIds = custLinks
             .Where(l => masterCustomers.Contains(l.ExternalId))
             .Select(l => l.ClientId).Distinct().ToList();
 
-        var alreadyMaster = await db.Clients.AsNoTracking()
-            .Where(c => masterClientIds.Contains(c.Id) && c.AccountType == AccountType.Master).CountAsync(ct);
-        var toFlip = masterClientIds.Count - alreadyMaster;
+        // Owner rule: a Master client must have made at least one AD-SPEND payment
+        // (ChargePaid <= $100 — payments above that are subscription fees). A sheet
+        // "Master" with no ad-spend payment is really a private/own-account
+        // subscriber, so the true master set is the intersection.
+        var adSpendClients = (await db.LedgerEntries.AsNoTracking()
+                .Where(l => l.Type == LedgerEntryType.ChargePaid && l.SignedAmount <= 100m)
+                .Select(l => l.ClientId).Distinct().ToListAsync(ct))
+            .ToHashSet();
+        var trueMasterIds = sheetMasterIds.Where(adSpendClients.Contains).ToList();
+        var excludedNoAdSpend = sheetMasterIds.Count - trueMasterIds.Count;
 
-        Console.WriteLine($"[mark-master] {masterClientIds.Count} clients match a Master-account Stripe customer ({alreadyMaster} already Master, {toFlip} to flip).");
+        Console.WriteLine($"[mark-master] {sheetMasterIds.Count} sheet-Master clients; {trueMasterIds.Count} have an ad-spend payment (true Master), {excludedNoAdSpend} do not (own-account subscribers).");
 
         if (commit)
         {
-            // Bulk update (bypasses the append-only SaveChanges interceptor, like the policy job's demote).
-            var flipped = await db.Clients
-                .Where(c => masterClientIds.Contains(c.Id) && c.AccountType != AccountType.Master)
+            // Bulk updates (bypass the append-only SaveChanges interceptor, like the policy job's demote).
+            var promoted = await db.Clients
+                .Where(c => trueMasterIds.Contains(c.Id) && c.AccountType != AccountType.Master)
                 .ExecuteUpdateAsync(s => s.SetProperty(c => c.AccountType, AccountType.Master), ct);
-            Console.WriteLine($"[mark-master] COMMITTED — set {flipped} clients to AccountType=Master (now in the policy's evaluation scope).");
+            // Any current Master that is NOT a true master (no ad-spend payment) → Own.
+            var demoted = await db.Clients
+                .Where(c => c.AccountType == AccountType.Master && !trueMasterIds.Contains(c.Id))
+                .ExecuteUpdateAsync(s => s.SetProperty(c => c.AccountType, AccountType.Own), ct);
+            Console.WriteLine($"[mark-master] COMMITTED — {promoted} set to Master, {demoted} demoted to Own (no ad-spend payment).");
         }
         else
         {
