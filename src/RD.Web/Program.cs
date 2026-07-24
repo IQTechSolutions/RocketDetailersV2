@@ -4,7 +4,9 @@ using Microsoft.EntityFrameworkCore;
 using MudBlazor.Services;
 using RD.Domain;
 using RD.Infrastructure;
+using RD.Infrastructure.Enforcement;
 using RD.Infrastructure.Sync;
+using RD.Infrastructure.Webhooks;
 using RD.Web.Components;
 using RD.Web.Services;
 
@@ -27,8 +29,12 @@ builder.Services.AddScoped<OutboxActionService>();
 builder.Services.AddScoped<ClientDirectoryService>();
 builder.Services.AddScoped<ReconciliationService>();
 
-// Lane A gateways + sync jobs + the policy evaluation heartbeat.
+// Lane A gateways + sync jobs + the policy heartbeat + M2 enforcement services
+// (dispatcher, approval CAS, kill switch, state builder, stager).
 builder.Services.AddRdSync(builder.Configuration);
+
+// Stripe webhook receiver (signature verify + recoverable inbox).
+builder.Services.AddStripeWebhooks(builder.Configuration);
 
 // Hangfire: same SQL Server database, own schema; recurring jobs only — the
 // outbox dispatcher (M2) is the pump for external writes, never fire-and-forget.
@@ -58,8 +64,11 @@ app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
+// Signature is verified over the raw body, so this endpoint reads bytes directly.
+app.MapStripeWebhook();
+
 // Dashboard: Hangfire's default filter allows local requests only; Operator
-// authorization replaces it when Identity lands (M2).
+// authorization replaces it when Identity lands.
 app.MapHangfireDashboard("/hangfire");
 
 // Recurring jobs — each vendor sync registers only when its credentials are
@@ -74,5 +83,11 @@ if (!string.IsNullOrEmpty(builder.Configuration["Meta:AccessToken"]))
 if (!string.IsNullOrEmpty(builder.Configuration["Ghl:Locations:0:Token"]))
     recurring.AddOrUpdate<GhlMessageSyncJob>("ghl-message-sync", j => j.RunAsync(CancellationToken.None), "*/15 * * * *");
 recurring.AddOrUpdate<PolicyEvaluationJob>("policy-evaluation", j => j.RunAsync(CancellationToken.None), "*/5 * * * *");
+
+// The outbox dispatcher is the single pump for external writes. It is always
+// scheduled but harmless until a client is promoted out of Shadow (nothing to
+// dispatch) and doubly guarded by the safety profile (TestMode + canary-only).
+recurring.AddOrUpdate<OutboxDispatcher>("outbox-dispatch", d => d.RunAsync(CancellationToken.None), "* * * * *");
+recurring.AddOrUpdate<GhlDeliveryVerificationJob>("ghl-delivery-verify", j => j.RunAsync(CancellationToken.None), "*/5 * * * *");
 
 app.Run();
