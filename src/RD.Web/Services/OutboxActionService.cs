@@ -113,11 +113,11 @@ public class OutboxActionService(IDbContextFactory<RdDbContext> factory, Approva
             .ToList();
     }
 
-    /// <summary>Cockpit Approve → CAS to Approved; the dispatcher revalidates then executes. Returns the outcome so the UI can report "already resolved" honestly.</summary>
-    public Task<ApprovalOutcome> ApproveAsync(Guid actionId)
-        => approvals.ApproveAsync(actionId, ApprovalChannel.Cockpit, "operator");
+    /// <summary>Cockpit Approve → CAS to Approved; the dispatcher revalidates then executes. Records the real operator; returns the outcome so the UI can report "already resolved".</summary>
+    public Task<ApprovalOutcome> ApproveAsync(Guid actionId, string actor)
+        => approvals.ApproveAsync(actionId, ApprovalChannel.Cockpit, actor);
 
     /// <summary>Cockpit Dismiss → CAS to Dismissed.</summary>
-    public Task<ApprovalOutcome> DismissAsync(Guid actionId, string? reason)
-        => approvals.DismissAsync(actionId, ApprovalChannel.Cockpit, "operator", reason);
+    public Task<ApprovalOutcome> DismissAsync(Guid actionId, string actor, string? reason)
+        => approvals.DismissAsync(actionId, ApprovalChannel.Cockpit, actor, reason);
 }

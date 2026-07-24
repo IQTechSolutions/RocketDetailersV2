@@ -1,0 +1,11 @@
+@inject NavigationManager Nav
+
+@code {
+    // Shown by AuthorizeRouteView when an unauthenticated user hits a gated
+    // page — bounce to login with a return URL so they land back where they were.
+    protected override void OnInitialized()
+    {
+        var returnUrl = Uri.EscapeDataString(new Uri(Nav.Uri).PathAndQuery);
+        Nav.NavigateTo($"/Account/Login?ReturnUrl={returnUrl}", forceLoad: false);
+    }
+}

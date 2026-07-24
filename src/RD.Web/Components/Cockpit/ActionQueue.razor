@@ -1,6 +1,7 @@
 @inject OutboxActionService Actions
 @inject IDialogService Dialogs
 @inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
 
 @* The Busy-state centerpiece: what the engine wants to do, with evidence chips and mode-aware Approve/Dismiss. *@
 <MudPaper Elevation="1" Class="pa-4">
@@ -50,26 +51,35 @@
                 <TemplateColumn Title="" Sortable="false">
                     <CellTemplate>
                         @{ var isShadow = context.Item.Mode == RD.Domain.EnforcementMode.Shadow; }
-                        <MudStack Row="true" Spacing="1">
-                            <MudTooltip Arrow="true" Text="@(isShadow ? "Shadow mode — engine observes only" : "Queue this action for execution")">
-                                <span>
-                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
-                                               Disabled="@isShadow"
-                                               OnClick="@(() => ConfirmAsync(context.Item, approve: true))">
-                                        Approve
-                                    </MudButton>
-                                </span>
-                            </MudTooltip>
-                            <MudTooltip Arrow="true" Text="@(isShadow ? "Shadow mode — engine observes only" : "Reject this proposal")">
-                                <span>
-                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
-                                               Disabled="@isShadow"
-                                               OnClick="@(() => ConfirmAsync(context.Item, approve: false))">
-                                        Dismiss
-                                    </MudButton>
-                                </span>
-                            </MudTooltip>
-                        </MudStack>
+                        <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
+                            <Authorized>
+                                <MudStack Row="true" Spacing="1">
+                                    <MudTooltip Arrow="true" Text="@(isShadow ? "Shadow mode — engine observes only" : "Queue this action for execution")">
+                                        <span>
+                                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                                       Disabled="@isShadow"
+                                                       OnClick="@(() => ConfirmAsync(context.Item, approve: true))">
+                                                Approve
+                                            </MudButton>
+                                        </span>
+                                    </MudTooltip>
+                                    <MudTooltip Arrow="true" Text="@(isShadow ? "Shadow mode — engine observes only" : "Reject this proposal")">
+                                        <span>
+                                            <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                                                       Disabled="@isShadow"
+                                                       OnClick="@(() => ConfirmAsync(context.Item, approve: false))">
+                                                Dismiss
+                                            </MudButton>
+                                        </span>
+                                    </MudTooltip>
+                                </MudStack>
+                            </Authorized>
+                            <NotAuthorized>
+                                <MudTooltip Arrow="true" Text="Approving actions requires the Operator role.">
+                                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mud-text-secondary" />
+                                </MudTooltip>
+                            </NotAuthorized>
+                        </AuthorizeView>
                     </CellTemplate>
                 </TemplateColumn>
             </Columns>
@@ -100,9 +110,10 @@
             yesText: verb, cancelText: "Cancel");
         if (confirmed != true) return;
 
+        var actor = (await AuthProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "operator";
         var outcome = approve
-            ? await Actions.ApproveAsync(row.Id)
-            : await Actions.DismissAsync(row.Id, null);
+            ? await Actions.ApproveAsync(row.Id, actor)
+            : await Actions.DismissAsync(row.Id, actor, null);
 
         switch (outcome)
         {

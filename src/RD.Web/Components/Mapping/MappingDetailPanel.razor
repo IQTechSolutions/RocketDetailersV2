@@ -109,12 +109,19 @@
         <MudCheckBox T="bool" @bind-Value="_acknowledged" Color="Color.Primary" Dense="true" Class="mt-2"
                      Label="I've verified these links control the right client's ads" />
 
-        <MudButton Class="mt-2" Variant="Variant.Filled" Color="Color.Primary"
-                   StartIcon="@Icons.Material.Filled.VerifiedUser"
-                   Disabled="@(!Detail.AllRequiredPresent || !_acknowledged)"
-                   OnClick="Verify">
-            Verify mapping
-        </MudButton>
+        <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
+            <Authorized>
+                <MudButton Class="mt-2" Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.VerifiedUser"
+                           Disabled="@(!Detail.AllRequiredPresent || !_acknowledged)"
+                           OnClick="Verify">
+                    Verify mapping
+                </MudButton>
+            </Authorized>
+            <NotAuthorized>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary mt-2">Verifying a mapping requires the Operator role.</MudText>
+            </NotAuthorized>
+        </AuthorizeView>
     </MudPaper>
 
     @* ---- Promotion: only after a current verification exists. ---- *@
@@ -130,11 +137,13 @@
                 <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mb-2">
                     Mapping verified — this client can climb from Shadow to Assist. Auto is earned later by clean days, never here.
                 </MudText>
-                <MudButton Variant="Variant.Filled" Color="Color.Secondary"
-                           StartIcon="@Icons.Material.Filled.TrendingUp"
-                           OnClick="@(() => OnPromote.InvokeAsync())">
-                    Promote to Assist mode
-                </MudButton>
+                <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
+                    <MudButton Variant="Variant.Filled" Color="Color.Secondary"
+                               StartIcon="@Icons.Material.Filled.TrendingUp"
+                               OnClick="@(() => OnPromote.InvokeAsync())">
+                        Promote to Assist mode
+                    </MudButton>
+                </AuthorizeView>
             }
             else
             {
