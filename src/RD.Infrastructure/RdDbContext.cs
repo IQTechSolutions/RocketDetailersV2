@@ -74,11 +74,15 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
             e.Property(x => x.ExternalId).HasMaxLength(100);
             e.HasOne(x => x.Client).WithMany(c => c.IdentityLinks).HasForeignKey(x => x.ClientId).OnDelete(DeleteBehavior.Restrict);
             // AdAccount is a SHARED identity (the master ad account backs ~177 clients) — uniqueness applies to the truly per-client kinds.
+            // This still guarantees a given Stripe customer/subscription belongs to exactly ONE client.
             e.HasIndex(x => new { x.System, x.Kind, x.ExternalId }).IsUnique().HasFilter("[Kind] <> 'AdAccount'");
-            // Cardinality: one ACTIVE Stripe Customer / Subscription / GHL Contact per client; many Campaigns allowed.
+            // Cardinality: one ACTIVE GHL Contact per client. Stripe Customer/Subscription are
+            // deliberately NOT constrained here — one business legitimately owns several Stripe
+            // accounts/subscriptions (verified live), and all of them link to the one client so
+            // every account is monitored. Campaigns were always many-per-client.
             e.HasIndex(x => new { x.ClientId, x.System, x.Kind })
                 .IsUnique()
-                .HasFilter("[InvalidatedAt] IS NULL AND [Kind] IN ('Customer','Subscription','Contact')");
+                .HasFilter("[InvalidatedAt] IS NULL AND [Kind] = 'Contact'");
         });
 
         b.Entity<MappingVerification>(e =>

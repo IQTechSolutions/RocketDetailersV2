@@ -17,7 +17,7 @@ namespace RD.Tools.Import;
 /// <summary>
 /// Read-only Stripe discovery → a CLUSTERED candidate roster for one-at-a-time triage.
 ///
-///   dotnet run --project src/RD.Tools.Import -- discover [--commit] [--crosswalk &lt;xlsx&gt;]
+///   dotnet run --project src/RD.Tools.Import -- discover [--commit] [--active-only] [--crosswalk &lt;xlsx&gt;]
 ///
 /// Sweeps live Stripe (read-only), clusters customers into candidate businesses
 /// via <see cref="CustomerClusterer"/> (shared normalized name OR shared email —
@@ -45,6 +45,10 @@ public static class StripeDiscoveryRunner
     public static async Task<int> RunAsync(string[] args)
     {
         var commit = args.Any(a => a.Equals("--commit", StringComparison.OrdinalIgnoreCase));
+        // --active-only: skip clusters with no subscription at all (Stripe keeps a
+        // customer record for every checkout, incl. one-time/guest buyers who were
+        // never recurring clients). This scopes the roster to real subscription-holders.
+        var activeOnly = args.Any(a => a.Equals("--active-only", StringComparison.OrdinalIgnoreCase));
         var crosswalkPath = ResolveCrosswalkPath(args);
 
         var config = new ConfigurationBuilder()
@@ -114,7 +118,7 @@ public static class StripeDiscoveryRunner
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var now = DateTimeOffset.UtcNow;
-        int created = 0, skipped = 0, singles = 0, multi = 0, custLinks = 0, subLinks = 0, trials = 0, flags = 0;
+        int created = 0, skipped = 0, filteredInactive = 0, singles = 0, multi = 0, custLinks = 0, subLinks = 0, trials = 0, flags = 0;
         int noSub = 0, delinquent = 0, nonUsd = 0, fromSheet = 0;
 
         foreach (var cluster in clusters)
@@ -123,6 +127,7 @@ public static class StripeDiscoveryRunner
             if (members.Any(m => alreadyLinked.Contains(m.Id))) { skipped++; continue; }
 
             var memberSubs = members.SelectMany(m => subsByCustomer.TryGetValue(m.Id, out var l) ? l : []).ToList();
+            if (activeOnly && memberSubs.Count == 0) { filteredInactive++; continue; }
             var anchorSub = memberSubs.FirstOrDefault(s => s.Status is "active" or "trialing" or "past_due") ?? memberSubs.FirstOrDefault();
             var currency = (anchorSub?.CurrencyCode ?? members.Select(m => m.CurrencyCode).FirstOrDefault(c => c is not null) ?? "USD").ToUpperInvariant();
             var isTrial = memberSubs.Any(s => s.Status == "trialing");
@@ -145,7 +150,8 @@ public static class StripeDiscoveryRunner
                 ContractType = isTrial ? ContractType.Trial : ContractType.Paid,
                 AccountType = AccountType.Own, // Master is a human call — never inferred.
                 EnforcementMode = EnforcementMode.Shadow,
-                Notes = $"Discovered from live Stripe {now:yyyy-MM-dd}. {members.Count} Stripe customer(s): {string.Join(", ", members.Select(m => m.Id))}. " +
+                Notes = $"Discovered from live Stripe {now:yyyy-MM-dd}. {members.Count} Stripe customer(s): " +
+                        $"{string.Join(", ", members.Take(12).Select(m => m.Id))}{(members.Count > 12 ? $" (+{members.Count - 12} more)" : "")}. " +
                         (sheetName is not null ? "Business name from master sheet." : "Business name = Stripe person name — confirm against sheet."),
                 CreatedAt = now,
             };
@@ -174,6 +180,9 @@ public static class StripeDiscoveryRunner
 
             void Flag(InvestigationKind kind, string detail)
             {
+                // Detail is capped at 1000 chars in the schema — clamp defensively so a
+                // big cluster's roster can never fail the whole batch on truncation.
+                if (detail.Length > 1000) detail = detail[..997] + "...";
                 db.InvestigationItems.Add(new InvestigationItem
                 {
                     Id = Guid.NewGuid(), ClientId = client.Id, Kind = kind, Detail = detail, CreatedAt = now,
@@ -184,7 +193,8 @@ public static class StripeDiscoveryRunner
             // The one-at-a-time task: a pre-grouped cluster to confirm or split.
             if (members.Count > 1)
             {
-                var roster = string.Join("; ", members.Select(m => $"{m.Id} <{m.Email ?? "no email"}>"));
+                var roster = string.Join("; ", members.Take(12).Select(m => $"{m.Id} <{m.Email ?? "no email"}>"))
+                             + (members.Count > 12 ? $" (+{members.Count - 12} more)" : "");
                 Flag(InvestigationKind.DuplicateStripeCustomer,
                     $"CONFIRM or SPLIT — {members.Count} Stripe customers grouped as one business [{cluster.Confidence}]. " +
                     $"Signals: {(cluster.Signals.Count > 0 ? string.Join("; ", cluster.Signals) : "n/a")}. Members: {roster}.");
@@ -205,7 +215,8 @@ public static class StripeDiscoveryRunner
             }
         }
 
-        Console.WriteLine($"[discover] candidates: {created} new ({singles} single, {multi} multi-customer), {skipped} skipped (already linked).");
+        Console.WriteLine($"[discover] candidates: {created} new ({singles} single, {multi} multi-customer), {skipped} skipped (already linked)" +
+                          (activeOnly ? $", {filteredInactive} filtered (no subscription)." : "."));
         Console.WriteLine($"[discover] links: {custLinks} Stripe customers, {subLinks} subscriptions.  trials: {trials}.  business names from sheet: {fromSheet}.");
         Console.WriteLine($"[discover] flags: {flags} total  —  cluster-to-confirm:{multi}  no-subscription:{noSub}  delinquent:{delinquent}  non-USD:{nonUsd}");
 
