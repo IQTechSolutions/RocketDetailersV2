@@ -16,6 +16,13 @@ public interface IGhlGateway
     Task<IReadOnlyList<GhlMessageDto>> GetMessagesAsync(
         string locationId, string conversationId, CancellationToken ct);
 
+    /// <summary>
+    /// Searches contacts in one location by a free-text query (GHL matches across
+    /// name / email / phone), using the supplied token directly so callers can
+    /// sweep several locations and match on whichever field they have. Read-only.
+    /// </summary>
+    Task<IReadOnlyList<GhlContactDto>> SearchContactsAsync(string? locationId, string token, string query, CancellationToken ct);
+
     /// <summary>Write a contact custom field (e.g. the hosted invoice URL a dunning workflow renders). TestMode redirects to the test contact.</summary>
     Task<GhlWriteResult> SetContactFieldAsync(
         string locationId, string contactId, string fieldKey, string value, CancellationToken ct);
@@ -29,6 +36,8 @@ public interface IGhlGateway
 public sealed record GhlWriteResult(bool Redirected, string EffectiveLocationId, string EffectiveContactId);
 
 public sealed record GhlConversationDto(string Id, string? ContactId);
+
+public sealed record GhlContactDto(string Id, string? Email, string? Phone, string? Name);
 
 public sealed record GhlMessageDto(
     string Id,
@@ -174,6 +183,33 @@ public sealed class GhlGateway : IGhlGateway
         foreach (var element in array.EnumerateArray())
         {
             if (ParseMessage(element) is { } message) results.Add(message);
+        }
+        return results;
+    }
+
+    public async Task<IReadOnlyList<GhlContactDto>> SearchContactsAsync(string? locationId, string token, string query, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(query)) return [];
+
+        var url = $"contacts/?query={Uri.EscapeDataString(query)}&limit=20";
+        if (!string.IsNullOrEmpty(locationId)) url += $"&locationId={Uri.EscapeDataString(locationId)}";
+
+        using var response = await _retry.SendAsync(_http, () => BuildRequest(url, token), ct);
+        if (!response.IsSuccessStatusCode) return []; // wrong location / no access — caller tries the next key
+
+        using var doc = await GatewayHttp.ReadDocumentAsync(response, ct);
+        if (!doc.RootElement.TryGetProperty("contacts", out var contacts) || contacts.ValueKind != JsonValueKind.Array)
+            return [];
+
+        var results = new List<GhlContactDto>();
+        foreach (var c in contacts.EnumerateArray())
+        {
+            var id = GetString(c, "id");
+            if (string.IsNullOrEmpty(id)) continue;
+            var name = GetString(c, "contactName")
+                       ?? $"{GetString(c, "firstName")} {GetString(c, "lastName")}".Trim();
+            results.Add(new GhlContactDto(id, GetString(c, "email"), GetString(c, "phone"),
+                string.IsNullOrWhiteSpace(name) ? null : name));
         }
         return results;
     }
