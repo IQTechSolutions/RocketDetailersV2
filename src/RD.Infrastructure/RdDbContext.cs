@@ -142,6 +142,8 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
             e.Property(x => x.DismissReason).HasMaxLength(500);
             e.Property(x => x.LeaseOwner).HasMaxLength(100);
             e.Property(x => x.LastError).HasMaxLength(2000);
+            // Nullable notify-once marker for the Slack notifier (maps to a single nullable datetimeoffset column).
+            e.Property(x => x.SlackNotifiedAt);
             e.Property(x => x.RowVersion).IsRowVersion();
             e.HasIndex(x => x.IdempotencyKey).IsUnique();
             e.HasIndex(x => new { x.Status, x.NotBefore, x.LeaseUntil });
