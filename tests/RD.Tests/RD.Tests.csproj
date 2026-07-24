@@ -8,6 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Direct pin: bunit 2.7.2 declares AngleSharp >= 1.4.0 and NuGet resolves the vulnerable floor (GHSA-pgww-w46g-26qg). Remove once bunit's floor is >= 1.5.0. -->
+    <PackageReference Include="AngleSharp" Version="1.5.2" />
     <PackageReference Include="bunit" Version="2.7.2" />
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="FluentAssertions" Version="8.10.0" />
