@@ -41,6 +41,9 @@ public sealed class EnforcementOptions
     /// <summary>Delay before verifying a dunning send actually reached the client (F2).</summary>
     public double DeliveryVerificationDelayMinutes { get; set; } = 10;
 
+    /// <summary>Consecutive clean days in Assist required before a client is eligible for Auto (design + OV2).</summary>
+    public int CleanDaysForAuto { get; set; } = 14;
+
     public TimeSpan DunningCadence => TimeSpan.FromHours(DunningCadenceHours);
     public TimeSpan DunningWindow => TimeSpan.FromHours(DunningWindowHours);
     public TimeSpan Lease => TimeSpan.FromSeconds(LeaseSeconds);

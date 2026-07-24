@@ -1,0 +1,145 @@
+@page "/ladder"
+@using RD.Infrastructure.Enforcement
+@inject PromotionService Promotions
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+
+<PageTitle>Enforcement ladder — Rocket Detailer Control Plane</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+    <MudText Typo="Typo.h5">Enforcement ladder</MudText>
+    <HelpHint Text="Every client climbs the same ladder: Shadow (the engine only watches), Assist (the engine proposes, a human approves), Auto (the engine acts on its own). A client reaches Auto only after 14 clean days in Assist and one proven enforcement action — never by a single click." />
+</MudStack>
+
+@if (_counts is null)
+{
+    <MudGrid Spacing="3">
+        @for (var i = 0; i < 3; i++)
+        {
+            <MudItem xs="12" sm="4"><MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="90px" /></MudItem>
+        }
+    </MudGrid>
+}
+else
+{
+    <MudGrid Spacing="3" Class="mb-2">
+        <MudItem xs="12" sm="4"><RungCard Title="Shadow" Count="_counts.Value.Shadow" Hint="Observed only — the safe default." Icon="@Icons.Material.Filled.Visibility" /></MudItem>
+        <MudItem xs="12" sm="4"><RungCard Title="Assist" Count="_counts.Value.Assist" Hint="Engine proposes, human approves." Icon="@Icons.Material.Filled.TouchApp" /></MudItem>
+        <MudItem xs="12" sm="4"><RungCard Title="Auto" Count="_counts.Value.Auto" Hint="Autonomous enforcement." Icon="@Icons.Material.Filled.AutoMode" /></MudItem>
+    </MudGrid>
+
+    <MudText Typo="Typo.h6" Class="mt-4 mb-2">Assist clients — progress toward Auto</MudText>
+    @if (_assist is null)
+    {
+        <GridSkeleton Rows="3" />
+    }
+    else if (_assist.Count == 0)
+    {
+        <MudPaper Elevation="1">
+            <EmptyState Icon="@Icons.Material.Filled.TouchApp"
+                        Title="No clients in Assist yet"
+                        Hint="Clients enter Assist from the Mapping wizard once their identities are verified. Until then the whole fleet stays in Shadow — the engine watches and proposes, but takes no action." >
+                <MudButton Variant="Variant.Outlined" Href="/mapping" StartIcon="@Icons.Material.Filled.Link">Go to the mapping wizard</MudButton>
+            </EmptyState>
+        </MudPaper>
+    }
+    else
+    {
+        <MudStack Spacing="2">
+            @foreach (var row in _assist)
+            {
+                <MudPaper Elevation="1" Class="pa-4">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                        <div style="min-width:0;">
+                            <MudText Typo="Typo.subtitle1" Style="font-weight:600;">@row.ClientName</MudText>
+                            <MudStack Row="true" Spacing="4" Class="mt-1" AlignItems="AlignItems.Center">
+                                <div style="min-width:180px;">
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">Clean days: @row.Assessment.CleanDayStreak / @row.Assessment.Threshold</MudText>
+                                    <MudProgressLinear Color="@(row.Assessment.CleanDayStreak >= row.Assessment.Threshold ? Color.Success : Color.Info)"
+                                                       Value="@(100.0 * row.Assessment.CleanDayStreak / row.Assessment.Threshold)" Class="mt-1" />
+                                </div>
+                                <MudChip T="string" Size="Size.Small" Color="@(row.Assessment.ExercisedFailurePath ? Color.Success : Color.Default)"
+                                         Icon="@(row.Assessment.ExercisedFailurePath ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.RadioButtonUnchecked)">
+                                    Exercised path
+                                </MudChip>
+                                <MudChip T="string" Size="Size.Small" Color="@(row.Assessment.MappingVerified ? Color.Success : Color.Warning)"
+                                         Icon="@(row.Assessment.MappingVerified ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Warning)">
+                                    Mapping verified
+                                </MudChip>
+                            </MudStack>
+                        </div>
+                        <MudTooltip Arrow="true" Text="@(row.Assessment.CanPromote ? "Promote this client to Auto mode" : string.Join(" ", row.Assessment.Blockers))">
+                            <span>
+                                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(!row.Assessment.CanPromote)"
+                                           StartIcon="@Icons.Material.Filled.AutoMode"
+                                           OnClick="@(() => PromoteAsync(row))">Promote to Auto</MudButton>
+                            </span>
+                        </MudTooltip>
+                    </MudStack>
+                    @if (!row.Assessment.CanPromote)
+                    {
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary mt-2">Not ready: @string.Join(" ", row.Assessment.Blockers)</MudText>
+                    }
+                </MudPaper>
+            }
+        </MudStack>
+    }
+
+    @if (_auto is { Count: > 0 })
+    {
+        <MudText Typo="Typo.h6" Class="mt-6 mb-2">Auto clients</MudText>
+        <MudStack Spacing="2">
+            @foreach (var (id, name) in _auto)
+            {
+                <MudPaper Elevation="1" Class="pa-3">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudIcon Icon="@Icons.Material.Filled.AutoMode" Color="Color.Primary" />
+                            <MudText Typo="Typo.subtitle1">@name</MudText>
+                        </MudStack>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.SouthWest"
+                                   OnClick="@(() => DemoteAsync(id, name))">Step down to Assist</MudButton>
+                    </MudStack>
+                </MudPaper>
+            }
+        </MudStack>
+    }
+}
+
+@code {
+    private (int Shadow, int Assist, int Auto)? _counts;
+    private IReadOnlyList<LadderRow>? _assist;
+    private IReadOnlyList<(Guid Id, string Name)>? _auto;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _counts = await Promotions.LadderCountsAsync();
+        _assist = await Promotions.AssessAllAssistAsync();
+        _auto = await Promotions.AutoClientsAsync();
+    }
+
+    private async Task PromoteAsync(LadderRow row)
+    {
+        var ok = await Dialogs.ShowMessageBoxAsync(
+            "Promote to Auto",
+            $"Auto mode lets the engine pause and resume {row.ClientName}'s ads and send dunning without waiting for a human. It has {row.Assessment.CleanDayStreak} clean days and a proven enforcement path. Continue?",
+            yesText: "Promote", cancelText: "Cancel");
+        if (ok != true) return;
+
+        var (result, assessment) = await Promotions.PromoteToAutoAsync(row.ClientId);
+        if (result == PromotionResult.Promoted)
+            Snackbar.Add($"{row.ClientName} promoted to Auto mode.", Severity.Success);
+        else
+            Snackbar.Add($"Not promoted — {string.Join(" ", assessment?.Blockers ?? ["conditions changed"])}", Severity.Warning);
+        await LoadAsync();
+    }
+
+    private async Task DemoteAsync(Guid id, string name)
+    {
+        await Promotions.DemoteToAssistAsync(id);
+        Snackbar.Add($"{name} stepped down to Assist mode.", Severity.Normal);
+        await LoadAsync();
+    }
+}

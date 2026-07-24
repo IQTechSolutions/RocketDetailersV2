@@ -38,6 +38,7 @@ public static class SyncServiceCollectionExtensions
         services.TryAddScoped<OutboxDispatcher>();
         services.TryAddScoped<ApprovalService>();
         services.TryAddScoped<KillSwitchService>();
+        services.TryAddScoped<PromotionService>();
 
         services.AddScoped<StripeSyncJob>();
         services.AddScoped<MetaSyncJob>();

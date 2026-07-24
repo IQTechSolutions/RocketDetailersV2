@@ -1,18 +1,33 @@
 @page "/analytics"
+@inject AnalyticsService AnalyticsSvc
 
 <PageTitle>Analytics — Rocket Detailer Control Plane</PageTitle>
 
 <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
-    <MudText Typo="Typo.h5">Analytics</MudText>
-    <HelpHint Text="Owner analytics and the CS funnel — planned for milestone M3, once the ledger has real history to report on." />
+    <MudText Typo="Typo.h5">Owner analytics</MudText>
+    <HelpHint Text="The money view: net cash position per master-account client, company exposure, package revenue and enforcement activity — all read-only queries over the ledger and decision log. Nothing here writes to the database." />
 </MudStack>
 
-<MudPaper Elevation="1">
-    <EmptyState Icon="@Icons.Material.Outlined.Insights"
-                Title="Analytics arrives in M3"
-                Hint="Per-client net position, funnel conversion with stage day-counts, churn cohorts and package revenue — all read-only queries over the ledger and event log. It ships once enforcement history accumulates; until then the numbers would be noise.">
-        <MudButton Variant="Variant.Outlined" Href="/" StartIcon="@Icons.Material.Filled.SpaceDashboard">
-            Back to the cockpit
-        </MudButton>
-    </EmptyState>
-</MudPaper>
+@if (_snapshot is null)
+{
+    @* Loading: headline card skeletons + panel skeletons — never a blank page. *@
+    <MudGrid Spacing="3">
+        @for (var i = 0; i < 3; i++)
+        {
+            <MudItem xs="12" sm="6" md="4"><MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="150px" /></MudItem>
+        }
+        <MudItem xs="12" md="7"><MudPaper Elevation="1"><GridSkeleton Rows="6" /></MudPaper></MudItem>
+        <MudItem xs="12" md="5"><MudPaper Elevation="1"><GridSkeleton Rows="6" /></MudPaper></MudItem>
+    </MudGrid>
+}
+else
+{
+    <AnalyticsBody Snapshot="_snapshot" />
+}
+
+@code {
+    private AnalyticsSnapshot? _snapshot;
+
+    protected override async Task OnInitializedAsync()
+        => _snapshot = await AnalyticsSvc.GetSnapshotAsync();
+}
