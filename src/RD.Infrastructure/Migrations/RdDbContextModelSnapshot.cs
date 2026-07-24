@@ -1103,7 +1103,8 @@ namespace RD.Infrastructure.Migrations
                         .HasColumnType("nvarchar(10)");
 
                     b.Property<decimal?>("SpendCapSnapshot")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
 
                     b.Property<DateTimeOffset>("StartsAt")
                         .HasColumnType("datetimeoffset");

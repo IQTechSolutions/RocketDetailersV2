@@ -62,6 +62,7 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
         b.Entity<TrialPeriod>(e =>
         {
             e.Property(x => x.Outcome).HasConversion<string>().HasMaxLength(10);
+            e.Property(x => x.SpendCapSnapshot).HasPrecision(19, 4);
             e.HasOne(x => x.Client).WithMany(c => c.TrialPeriods).HasForeignKey(x => x.ClientId).OnDelete(DeleteBehavior.Restrict);
             e.HasIndex(x => new { x.ClientId, x.StartsAt });
         });
