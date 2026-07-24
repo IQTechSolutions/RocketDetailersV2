@@ -149,6 +149,97 @@ public sealed class StripeWebhookIngestorTests : IDisposable
         db.LedgerEntries.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task InvoicePaymentFailed_ProjectsOpenInvoice_NeverWritesLedger()
+    {
+        var clientId = _db.SeedClientWithLink(ExternalSystem.Stripe, LinkKind.Customer, "cus_pf");
+
+        var payload = InvoiceEvent(
+            "evt_pf", "invoice.payment_failed", "in_pf", "cus_pf", "sub_pf",
+            status: "open", amountDue: 4900, amountPaid: 0);
+
+        var result = await CreateIngestor().IngestAsync(
+            "evt_pf", "invoice.payment_failed", payload, CancellationToken.None);
+        result.Should().Be(WebhookIngestResult.Processed);
+
+        await using var db = _db.CreateContext();
+
+        var invoice = db.StripeInvoices.Single();
+        invoice.InvoiceId.Should().Be("in_pf");
+        invoice.ClientId.Should().Be(clientId);
+        invoice.Status.Should().Be("open");                       // the failed payment leaves it open
+        invoice.AmountDue.Should().Be(49.00m);
+        invoice.AmountPaid.Should().Be(0m);
+        invoice.HostedInvoiceUrl.Should().Be("https://invoice.stripe.com/i/in_pf"); // dunning needs this URL
+
+        db.LedgerEntries.Should().BeEmpty();                      // no payment ⇒ no money movement
+        var inbox = db.WebhookInbox.Single();
+        inbox.Status.Should().Be(WebhookStatus.Processed);
+        inbox.EntityRef.Should().Be("in_pf");
+    }
+
+    [Fact]
+    public async Task ResolveClient_SubscriptionLinkWinsOverCustomer_AndInvalidatedLinkIsRefused()
+    {
+        // Client A owns the subscription link, client B the customer link.
+        var subClientId = _db.SeedClientWithLink(ExternalSystem.Stripe, LinkKind.Subscription, "sub_x");
+        var cusClientId = _db.SeedClientWithLink(ExternalSystem.Stripe, LinkKind.Customer, "cus_x");
+        var ingestor = CreateIngestor();
+
+        // Both ids present ⇒ the subscription link wins.
+        var first = await ingestor.IngestAsync("evt_prec_1", "invoice.payment_failed",
+            InvoiceEvent("evt_prec_1", "invoice.payment_failed", "in_prec_1", "cus_x", "sub_x",
+                status: "open", amountDue: 4900, amountPaid: 0), CancellationToken.None);
+        first.Should().Be(WebhookIngestResult.Processed);
+
+        await using (var db = _db.CreateContext())
+        {
+            db.StripeInvoices.Single(i => i.InvoiceId == "in_prec_1").ClientId.Should().Be(subClientId);
+
+            // Mapping drift: the subscription link is invalidated — it must never route again.
+            var link = db.IdentityLinks.Single(l => l.ExternalId == "sub_x");
+            link.InvalidatedAt = _clock.UtcNow;
+            await db.SaveChangesAsync();
+        }
+
+        // Same pair of ids ⇒ the dead subscription link is refused; the customer link resolves.
+        var second = await ingestor.IngestAsync("evt_prec_2", "invoice.payment_failed",
+            InvoiceEvent("evt_prec_2", "invoice.payment_failed", "in_prec_2", "cus_x", "sub_x",
+                status: "open", amountDue: 4900, amountPaid: 0), CancellationToken.None);
+        second.Should().Be(WebhookIngestResult.Processed);
+
+        await using var verify = _db.CreateContext();
+        verify.StripeInvoices.Single(i => i.InvoiceId == "in_prec_2").ClientId.Should().Be(cusClientId);
+    }
+
+    private static string InvoiceEvent(
+        string eventId, string eventType, string invoiceId, string customerId, string? subscriptionId,
+        string status, long amountDue, long amountPaid)
+    {
+        var subscriptionField = subscriptionId is null ? "null" : $"\"{subscriptionId}\"";
+        return $$"""
+        {
+          "id": "{{eventId}}",
+          "type": "{{eventType}}",
+          "data": {
+            "object": {
+              "id": "{{invoiceId}}",
+              "customer": "{{customerId}}",
+              "subscription": {{subscriptionField}},
+              "status": "{{status}}",
+              "amount_due": {{amountDue}},
+              "amount_paid": {{amountPaid}},
+              "currency": "usd",
+              "hosted_invoice_url": "https://invoice.stripe.com/i/{{invoiceId}}",
+              "created": 1784505600,
+              "due_date": null,
+              "status_transitions": { "paid_at": null }
+            }
+          }
+        }
+        """;
+    }
+
     private static string InvoicePaidEvent(
         string eventId, string invoiceId, string customerId, string? subscriptionId, long amountPaid)
     {

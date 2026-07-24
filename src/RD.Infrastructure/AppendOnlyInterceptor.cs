@@ -14,13 +14,19 @@ public sealed class AppendOnlyInterceptor : SaveChangesInterceptor
 {
     private static readonly Type[] AppendOnlyTypes =
     [
-        typeof(LedgerEntry), typeof(Decision), typeof(DunningAttempt),
-        typeof(WebhookInboxItem) // status fields are the ONLY mutable columns — see exception below
+        typeof(LedgerEntry), typeof(Decision),
+        // DunningAttempt and WebhookInboxItem are append-only for DELETES, but their
+        // lifecycle columns are meant to be filled in after insert:
+        //   DunningAttempt — TriggeredAt (dispatcher) then VerifiedAt/FailureReason
+        //                    (the delayed GHL delivery-verification job).
+        //   WebhookInboxItem — status fields.
+        // So they are NOT in StrictlyImmutable below.
+        typeof(DunningAttempt), typeof(WebhookInboxItem)
     ];
 
     private static readonly Type[] StrictlyImmutable =
     [
-        typeof(LedgerEntry), typeof(Decision), typeof(DunningAttempt)
+        typeof(LedgerEntry), typeof(Decision)
     ];
 
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)

@@ -263,6 +263,7 @@ public sealed class OutboxDispatcher(
             FROM OutboxActions AS o
             WHERE o.Status = 'Approved'
               AND (o.NotBefore IS NULL OR o.NotBefore <= @now)
+              AND (o.NextAttemptAt IS NULL OR o.NextAttemptAt <= @now)
               AND (o.LeaseUntil IS NULL OR o.LeaseUntil < @now)
               AND (o.SequenceGroup IS NULL OR NOT EXISTS (
                     SELECT 1 FROM OutboxActions AS p

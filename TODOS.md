@@ -30,6 +30,37 @@ Deferred work with context. Nothing here is forgotten — it is deliberately seq
 **Priority:** P3
 **Depends on:** M1 ledger in production
 
+## Testing
+
+### M2 test coverage debt (from /ship coverage audit, 2026-07-24)
+
+**What:** Close the remaining untested paths in the M2 enforcement spine.
+
+**Why:** Untested enforcement paths touch client money and messaging; regressions there are silent and expensive.
+
+**Context:** The /ship audit measured ~56% path coverage. This work added 13 tests (dispatcher retry ladder + enforced backoff, kill-switch engage/release, action stager, F2 delivery verification, Stripe webhook variants) and fixed two production bugs found during the audit (DunningAttempt immutability blocking F2; unenforced retry backoff). Remaining gaps:
+- **P1** — `RD.Web/Services/MappingWizardService.cs` DB-write paths untested. Highest-risk is `AddOrReplaceLink` (invalidate prior link + invalidate verification + demote client to Shadow, in one transaction); also `VerifyMapping` refusals/supersede, `PromoteToAssist` DB path, `ResolveDuplicateStripe`. Only the pure helpers in `MappingLogic.cs` are covered.
+- **P2** — dispatcher execution arms + sequence-group claiming: `ExecuteResumeAsync`, `WriteGhlField`, `TriggerGhlWorkflow` happy/error arms, ordered `SequenceGroup` claiming.
+- **P2** — gateway error paths: `GhlGateway.TriggerWorkflowAsync` non-2xx; `MetaAdsGateway` resume + `GetCampaign` 404→null + non-convergence result.
+- **P3** — UI/E2E flows: mapping wizard journey (select→suggest→link→verify→promote), kill-switch card engage/release, ActionQueue approve/dismiss snackbars incl. the AlreadyResolved race message.
+
+**Priority:** P1 (highest remaining item)
+**Depends on:** —
+
+### Append-only enforcement hardening (from /ship review, 2026-07-24)
+
+**What:** Harden `AppendOnlyInterceptor` and outbox lease recovery.
+
+**Why:** Entity-granular immutability leaves lifecycle-bearing evidence rows partially unprotected, and a lease gap can strand outbox actions.
+
+**Context:**
+- **P2** — append-only enforcement is entity-granular, not column-granular. Append-only types that need lifecycle columns (`DunningAttempt`, `WebhookInboxItem`) are deletes-only, so their financial/identity columns (`DunningAttempt.Step`, `DueAt`, `DunningCaseId`) are mutable in principle — no active corruption path today, but a future edit could silently break the audit trail. Close with a per-type mutable-column allowlist in the interceptor.
+- **P3** — outbox lease recovery: a dispatcher that crashes between claim and the try/catch leaves a row `Status='Leased'`; the claim query only matches `Status='Approved'` and there is no sweeper to reclaim an expired `LeaseUntil`. Add a recovery sweep. (`OutboxDispatcher.ClaimBatchAsync`)
+- **P4** — index coverage: the outbox claim query now filters `NextAttemptAt`, which isn't in `IX_OutboxActions_Status_NotBefore_LeaseUntil`; add it if outbox depth grows.
+
+**Priority:** P2
+**Depends on:** —
+
 ## Discovery (M0)
 
 ### Design-doc open questions awaiting owner answers

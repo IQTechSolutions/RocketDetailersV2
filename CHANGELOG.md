@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 Format: `## [MAJOR.MINOR.PATCH.MICRO] - YYYY-MM-DD` with Added / Changed / Fixed / Removed sections.
 
+## [0.0.0.4] - 2026-07-24
+
+### Fixed
+
+- Dunning delivery-verification (F2) could never run in production. The append-only guard treated every `DunningAttempt` update as forbidden, so the delivery-verification job threw on each run, and GHL dunning triggers stamped the attempt, crashed before persisting, and re-fired the workflow to the real contact on every retry. Attempts stay delete-protected, but their verification trail (`TriggeredAt` / `VerifiedAt` / `FailureReason`) can now be written, so delivery verification and dunning triggers work as designed.
+- Outbox retry backoff is now actually enforced. A transient gateway failure scheduled a backoff (`NextAttemptAt`) that the claim query ignored, so a failed action was re-claimable on the immediate next pass and burned all its attempts almost instantly instead of backing off. The claim query now honors `NextAttemptAt`.
+
+### Changed
+
+- Added DB-backed test coverage from the /ship coverage audit (F2 delivery verification, enforced retry backoff, kill-switch engage/release, action stager, Stripe webhook variants) and recorded the remaining M2 coverage debt and append-only hardening items in TODOS.md.
+
 ## [0.0.0.3] - 2026-07-24
 
 ### Added
