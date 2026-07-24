@@ -14,13 +14,17 @@ public sealed class AppendOnlyInterceptor : SaveChangesInterceptor
 {
     private static readonly Type[] AppendOnlyTypes =
     [
-        typeof(LedgerEntry), typeof(Decision), typeof(DunningAttempt),
+        typeof(LedgerEntry), typeof(Decision),
+        // Evidence rows are never deleted, but their verification trail
+        // (TriggeredAt/VerifiedAt/FailureReason) is filled in over the row's
+        // life — delete-protected, not update-protected, like WebhookInboxItem.
+        typeof(DunningAttempt),
         typeof(WebhookInboxItem) // status fields are the ONLY mutable columns — see exception below
     ];
 
     private static readonly Type[] StrictlyImmutable =
     [
-        typeof(LedgerEntry), typeof(Decision), typeof(DunningAttempt)
+        typeof(LedgerEntry), typeof(Decision)
     ];
 
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
