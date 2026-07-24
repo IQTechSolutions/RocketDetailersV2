@@ -104,6 +104,35 @@ public static class Human
         _ => type.ToString(),
     };
 
+    // ---------------- Proposed actions (analytics / enforcement activity) ----------------
+
+    public static string Label(this ProposedActionType action) => action switch
+    {
+        ProposedActionType.None => "No action (paid up)",
+        ProposedActionType.Pause => "Would pause ads",
+        ProposedActionType.Resume => "Would resume ads",
+        ProposedActionType.DunningStep => "Would send dunning",
+        ProposedActionType.Escalate => "Would escalate",
+        ProposedActionType.Investigate => "Needs investigation",
+        _ => action.ToString(),
+    };
+
+    // ---------------- Client segmentation (analytics client mix) ----------------
+
+    public static string Label(this AccountType type) => type switch
+    {
+        AccountType.Master => "Master account",
+        AccountType.Own => "Own account",
+        _ => type.ToString(),
+    };
+
+    public static string Label(this ContractType type) => type switch
+    {
+        ContractType.Trial => "Trial",
+        ContractType.Paid => "Paid",
+        _ => type.ToString(),
+    };
+
     // ---------------- Systems ----------------
 
     public static string Label(this ExternalSystem system) => system switch
@@ -131,6 +160,15 @@ public static class Human
     /// <summary>Whole-figure money for KPIs ("$4,318" / "CAD 1,204").</summary>
     public static string MoneyKpi(decimal amount, string currency)
         => currency == "USD" ? $"${amount:N0}" : $"{currency} {amount:N0}";
+
+    /// <summary>Signed whole-figure money for a headline that can go negative ("+$4,318" / "−$1,204" / "$0").</summary>
+    public static string MoneyKpiSigned(decimal amount, string currency)
+    {
+        var abs = Math.Abs(amount);
+        var figure = currency == "USD" ? $"${abs:N0}" : $"{currency} {abs:N0}";
+        var sign = amount < 0 ? "−" : amount > 0 ? "+" : "";
+        return $"{sign}{figure}";
+    }
 
     /// <summary>Exact money for ledger lines ("+$25.00" / "−$23.10", "CAD 25.00").</summary>
     public static string MoneySigned(decimal signedAmount, string currency)

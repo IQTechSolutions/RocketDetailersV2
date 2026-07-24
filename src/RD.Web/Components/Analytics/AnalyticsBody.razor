@@ -1,0 +1,284 @@
+@using RD.Domain
+@* The owner analytics dashboard body. Pure render over a snapshot (the page
+   owns loading) so it renders in bUnit without touching the DB, mirroring how
+   the cockpit factors its states into child components. *@
+
+<MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined" Class="mb-4">
+    Cash position reflects charges received versus ad spend. Stripe fees, payouts and settlement
+    are not yet reconciled — a known TODO, so treat these as receivables-vs-spend figures.
+</MudAlert>
+
+@* ---- Section 1: per-currency company headline cards + verified-mapping % ---- *@
+<MudGrid Spacing="3">
+    @if (Snapshot.HasLedgerData)
+    {
+        <MudItem xs="12" sm="6" md="4">
+            <AnalyticsNetCashCard Rollup="Snapshot.UsdRollup" />
+        </MudItem>
+        @foreach (var r in Snapshot.NonUsdRollups)
+        {
+            <MudItem xs="12" sm="6" md="4">
+                <AnalyticsNetCashCard Rollup="r" />
+            </MudItem>
+        }
+    }
+    <MudItem xs="12" sm="6" md="4">
+        <KpiCard Label="Verified mapping"
+                 Value="@($"{Snapshot.VerifiedMappingPct:0.#}%")"
+                 Hint="@($"{Snapshot.VerifiedMasterClientCount} of {Snapshot.MasterClientCount} master-account clients")"
+                 Help="Share of master-account clients whose Stripe↔Meta↔GHL identity mapping is verified and current. Enforcement can only climb past Shadow for verified clients — this is the readiness gauge for Assist and Auto."
+                 ValueColor="@(Snapshot.VerifiedMappingPct >= 90 ? Color.Success : Snapshot.VerifiedMappingPct > 0 ? Color.Warning : Color.Default)">
+            <MudProgressLinear Color="Color.Primary" Rounded="true" Size="Size.Small"
+                               Value="@Snapshot.VerifiedMappingPct" Class="mt-1" />
+        </KpiCard>
+    </MudItem>
+</MudGrid>
+
+@if (!Snapshot.HasLedgerData)
+{
+    <MudPaper Elevation="1" Class="mt-3 mb-4">
+        <EmptyState Icon="@Icons.Material.Outlined.Savings"
+                    Title="No paid charges recorded yet"
+                    Hint="Analytics fill in as the ledger grows. Once Stripe charges and Meta ad spend land for master-account clients, net cash position, company exposure and package revenue appear here." />
+    </MudPaper>
+}
+else
+{
+    @* ---- Section 2: net cash position — ranked table + top-N exposure bar ---- *@
+    <MudGrid Spacing="3" Class="mt-0">
+        <MudItem xs="12" md="7">
+            <MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+                    <MudText Typo="Typo.h6">Net cash position by client</MudText>
+                    <HelpHint Text="Every master-account client that has moved money, most-negative first — the clients costing Rocket Detailer money lead. Net = charges they paid minus what we spent on their ads, in their own currency (no FX conversion)." />
+                </MudStack>
+                <MudDataGrid T="ClientNetPosition" Items="Snapshot.ClientNetPositions" Dense="true" Hover="true" Elevation="0">
+                    <Columns>
+                        <TemplateColumn Title="Client" Sortable="false">
+                            <CellTemplate>
+                                <MudLink Href="@($"/clients/{context.Item.ClientId}")" Typo="Typo.body2">@context.Item.BusinessName</MudLink>
+                            </CellTemplate>
+                        </TemplateColumn>
+                        <TemplateColumn Title="Mode" Sortable="false">
+                            <CellTemplate><ModeBadge Mode="context.Item.Mode" /></CellTemplate>
+                        </TemplateColumn>
+                        <TemplateColumn Title="Charges paid" Sortable="false">
+                            <CellTemplate>
+                                <MudText Typo="Typo.body2">@Human.MoneyKpi(context.Item.Paid, context.Item.CurrencyCode)</MudText>
+                            </CellTemplate>
+                        </TemplateColumn>
+                        <TemplateColumn Title="Ad spend" Sortable="false">
+                            <CellTemplate>
+                                <MudText Typo="Typo.body2">@Human.MoneyKpi(context.Item.AdSpendCost, context.Item.CurrencyCode)</MudText>
+                            </CellTemplate>
+                        </TemplateColumn>
+                        <TemplateColumn Title="Net" Sortable="false">
+                            <CellTemplate>
+                                <MudText Typo="Typo.body2" Style="font-weight:600;"
+                                         Color="@(context.Item.NetPosition < 0 ? Color.Error : Color.Success)">
+                                    @Human.MoneyKpiSigned(context.Item.NetPosition, context.Item.CurrencyCode)
+                                </MudText>
+                            </CellTemplate>
+                        </TemplateColumn>
+                    </Columns>
+                    <PagerContent>
+                        <MudDataGridPager T="ClientNetPosition" PageSizeOptions="new[] { 10, 25, 50 }" />
+                    </PagerContent>
+                </MudDataGrid>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" md="5">
+            <MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+                    <MudText Typo="Typo.h6">Top USD exposure</MudText>
+                    <HelpHint Text="The USD master-account clients with the most unbilled ad spend — ad spend we paid Meta that they haven't covered yet. These are where uncollected money is concentrated. Non-USD clients are excluded (no FX)." />
+                </MudStack>
+                @if (_exposureLabels.Length > 0)
+                {
+                    <MudChart T="double" ChartType="ChartType.Bar" ChartSeries="_exposureSeries" ChartLabels="_exposureLabels"
+                              Width="100%" Height="320px" ChartOptions="_exposureOptions" />
+                }
+                else
+                {
+                    <EmptyState Icon="@Icons.Material.Outlined.CheckCircle"
+                                Title="No USD exposure"
+                                Hint="Every USD master-account client has paid for at least as much ad spend as we've run. Exposure is $0." />
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @* ---- Section 3 + 4: enforcement activity + package revenue ---- *@
+    <MudGrid Spacing="3" Class="mt-0">
+        <MudItem xs="12" md="7">
+            <MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+                    <MudText Typo="Typo.h6">Enforcement activity — last @AnalyticsService.WindowDays days</MudText>
+                    <HelpHint Text="What the engine decided each day, stacked by verdict type: would-pause, would-send-dunning, escalate, and no-action (paid up). In Shadow mode these are proposals only — nothing touched Stripe, Meta or GHL." />
+                </MudStack>
+                @if (Snapshot.EnforcementActivity.HasAny)
+                {
+                    <MudChart T="double" ChartType="ChartType.StackedBar" ChartSeries="_activitySeries" ChartLabels="_activityLabels"
+                              Width="100%" Height="320px" ChartOptions="_activityOptions" />
+                }
+                else
+                {
+                    <EmptyState Icon="@Icons.Material.Outlined.Timeline"
+                                Title="No enforcement verdicts yet"
+                                Hint="@($"The policy engine has logged no decisions in the last {AnalyticsService.WindowDays} days. Verdicts appear here once the evaluation heartbeat runs against synced data.")" />
+                }
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" md="5">
+            <MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+                    <MudText Typo="Typo.h6">USD revenue by package</MudText>
+                    <HelpHint Text="Charges paid grouped by each client's assigned package. Most clients have no package yet, so an honest 'Unassigned' slice carries that revenue rather than inventing an offer. USD only — currencies are never mixed." />
+                </MudStack>
+                @if (_packageLabels.Length > 0)
+                {
+                    <div class="d-flex flex-column align-center">
+                        <MudChart T="double" ChartType="ChartType.Donut" ChartSeries="_packageSeries" ChartLabels="_packageLabels"
+                                  Width="260px" Height="260px" ChartOptions="_packageOptions" />
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary mt-2">
+                            Total USD charges paid: @Human.MoneyKpi(_packageTotal, "USD")
+                        </MudText>
+                    </div>
+                }
+                else
+                {
+                    <EmptyState Icon="@Icons.Material.Outlined.DonutLarge"
+                                Title="No USD charges yet"
+                                Hint="Package revenue appears once USD charges are recorded in the ledger." />
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@* ---- Section 5: reconciliation health (gap breakdown reuses the cockpit panel) ---- *@
+<MudGrid Spacing="3" Class="mt-0">
+    <MudItem xs="12" md="5">
+        <MappingGapsPanel Gaps="Snapshot.MappingGaps" />
+    </MudItem>
+    <MudItem xs="12" md="7">
+        <MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+                <MudText Typo="Typo.h6">Client mix</MudText>
+                <HelpHint Text="Who's in the book: master-account vs own-account, trial vs paid, and where master clients sit on the enforcement ladder. Own-account clients pay Meta directly, so they never create exposure." />
+            </MudStack>
+
+            <MudText Typo="Typo.overline" Class="mud-text-secondary">By account &amp; contract</MudText>
+            <MudGrid Spacing="2" Class="mb-3 mt-0">
+                @foreach (var seg in Snapshot.ClientSegments)
+                {
+                    <MudItem xs="6" sm="3">
+                        <MudPaper Outlined="true" Class="pa-3" Style="height:100%;">
+                            <MudText Typo="Typo.h5" Style="font-weight:700;">@seg.Count</MudText>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                @seg.AccountType.Label() · @seg.ContractType.Label()
+                            </MudText>
+                        </MudPaper>
+                    </MudItem>
+                }
+            </MudGrid>
+
+            <MudText Typo="Typo.overline" Class="mud-text-secondary">Enforcement ladder (master clients)</MudText>
+            <MudGrid Spacing="2" Class="mt-0">
+                @foreach (var m in Snapshot.ModeMix)
+                {
+                    <MudItem xs="4">
+                        <MudPaper Outlined="true" Class="pa-3 d-flex flex-column align-start" Style="height:100%;">
+                            <MudText Typo="Typo.h5" Style="font-weight:700;">@m.Count</MudText>
+                            <ModeBadge Mode="m.Mode" />
+                        </MudPaper>
+                    </MudItem>
+                }
+            </MudGrid>
+
+            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-3">
+                CS lifecycle funnel (stage day-counts, churn cohorts) arrives with the GoHighLevel tag-timestamp feed —
+                it needs a tag-history source this app does not ingest yet. The mix above is current composition, not a funnel.
+            </MudText>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@code {
+    [Parameter, EditorRequired] public AnalyticsSnapshot Snapshot { get; set; } = default!;
+
+    // ---- Enforcement-activity stacked bar ----
+    private List<ChartSeries<double>> _activitySeries = [];
+    private string[] _activityLabels = [];
+    private ChartOptions _activityOptions = new();
+
+    // ---- Top-USD-exposure bar ----
+    private List<ChartSeries<double>> _exposureSeries = [];
+    private string[] _exposureLabels = [];
+    private readonly ChartOptions _exposureOptions = new() { ChartPalette = ["#B45309"], ShowLegend = false };
+
+    // ---- Package-revenue donut ----
+    private List<ChartSeries<double>> _packageSeries = [];
+    private string[] _packageLabels = [];
+    private readonly ChartOptions _packageOptions = new() { ChartPalette = PackagePalette };
+    private decimal _packageTotal;
+
+    private static readonly string[] PackagePalette =
+        ["#1E4E8C", "#0E7490", "#5B6B7F", "#1B7F4B", "#B45309", "#6EA8FE", "#2DD4BF", "#93A3B8"];
+
+    protected override void OnParametersSet()
+    {
+        BuildActivityChart();
+        BuildExposureChart();
+        BuildPackageChart();
+    }
+
+    private void BuildActivityChart()
+    {
+        var act = Snapshot.EnforcementActivity;
+        _activityLabels = act.Days.Select(d => d.ToString("MMM d")).ToArray();
+        _activitySeries = act.Series
+            .Select(s => new ChartSeries<double> { Name = s.Action.Label(), Data = s.CountsPerDay.Select(c => (double)c).ToArray() })
+            .ToList();
+        _activityOptions = new ChartOptions
+        {
+            ChartPalette = act.Series.Select(s => ActionColor(s.Action)).ToArray(),
+        };
+    }
+
+    private void BuildExposureChart()
+    {
+        var top = Snapshot.ClientNetPositions
+            .Where(p => p.CurrencyCode == "USD" && p.Exposure > 0)
+            .OrderByDescending(p => p.Exposure)
+            .Take(10)
+            .ToList();
+        _exposureLabels = top.Select(p => Shorten(p.BusinessName)).ToArray();
+        _exposureSeries = top.Count == 0
+            ? []
+            : [new ChartSeries<double> { Name = "Unbilled exposure (USD)", Data = top.Select(p => (double)p.Exposure).ToArray() }];
+    }
+
+    private void BuildPackageChart()
+    {
+        var slices = Snapshot.UsdPackageRevenue.ToList();
+        _packageLabels = slices.Select(s => s.PackageName).ToArray();
+        _packageSeries = slices.Count == 0
+            ? []
+            : [new ChartSeries<double> { Name = "USD charges paid", Data = slices.Select(s => (double)s.Paid).ToArray() }];
+        _packageTotal = slices.Sum(s => s.Paid);
+    }
+
+    private static string Shorten(string name) => name.Length <= 14 ? name : name[..12] + "…";
+
+    private static string ActionColor(ProposedActionType action) => action switch
+    {
+        ProposedActionType.None => "#1B7F4B",        // green — paid up
+        ProposedActionType.Pause => "#B42318",       // red — would pause
+        ProposedActionType.Resume => "#1D6FA5",      // blue — would resume
+        ProposedActionType.DunningStep => "#B45309", // amber — would dun
+        ProposedActionType.Escalate => "#7C2D12",    // deep — escalate
+        ProposedActionType.Investigate => "#5B6B7F", // grey — investigate
+        _ => "#93A3B8",
+    };
+}

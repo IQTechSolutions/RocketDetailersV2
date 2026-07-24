@@ -1,0 +1,53 @@
+@using RD.Domain
+@* One currency's company net cash position — the M3 headline (Req #8). Big,
+   colored: green when we're ahead, red when we've paid Meta more than clients
+   have paid us. No FX — each currency gets its own card. *@
+<MudPaper Class="pa-4 d-flex flex-column" Elevation="1" Style="height:100%;">
+    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+        <MudText Typo="Typo.overline" Class="mud-text-secondary" Style="line-height:1.2;">
+            Net cash position — @Rollup.CurrencyCode
+        </MudText>
+        <HelpHint Text="@($"Everything master-account clients have paid us in {Rollup.CurrencyCode}, minus everything we've spent on their Meta ads. Positive = we're ahead; negative = we're funding ads faster than clients pay. Charges received vs ad spend only — Stripe fees and payouts are not yet reconciled.")" />
+    </MudStack>
+
+    <MudText Typo="Typo.h3" Style="font-weight:700;"
+             Color="@(Rollup.NetPosition < 0 ? Color.Error : Color.Success)">
+        @Human.MoneyKpiSigned(Rollup.NetPosition, Rollup.CurrencyCode)
+    </MudText>
+
+    <MudStack Row="true" Spacing="4" Class="mt-2">
+        <div>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">Charges paid</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Success" Style="font-weight:600;">
+                @Human.MoneyKpi(Rollup.Paid, Rollup.CurrencyCode)
+            </MudText>
+        </div>
+        <div>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">Ad spend</MudText>
+            <MudText Typo="Typo.body2" Style="font-weight:600;">
+                @Human.MoneyKpi(Rollup.AdSpendCost, Rollup.CurrencyCode)
+            </MudText>
+        </div>
+        <div>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">Exposure</MudText>
+            <MudTooltip Arrow="true" Text="Unbilled ad spend — the sum, per client, of ad spend not yet covered by their payments (never below zero). Goal: $0.">
+                <MudText Typo="Typo.body2" Style="font-weight:600;"
+                         Color="@(Rollup.Exposure > 0 ? Color.Warning : Color.Default)">
+                    @Human.MoneyKpi(Rollup.Exposure, Rollup.CurrencyCode)
+                </MudText>
+            </MudTooltip>
+        </div>
+    </MudStack>
+
+    <MudText Typo="Typo.caption" Class="mud-text-secondary mt-2">
+        @Rollup.ClientCount @(Rollup.ClientCount == 1 ? "client" : "clients") with activity
+        @if (Rollup.NegativeClientCount > 0)
+        {
+            <span> · @Rollup.NegativeClientCount underwater</span>
+        }
+    </MudText>
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public CurrencyRollup Rollup { get; set; } = default!;
+}
