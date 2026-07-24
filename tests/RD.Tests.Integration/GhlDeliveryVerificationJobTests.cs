@@ -138,5 +138,23 @@ public sealed class GhlDeliveryVerificationJobTests : IDisposable
         (await ctx.AlertLog.AnyAsync()).Should().BeFalse();
     }
 
+    // ── Still inside the initial grace window ⇒ the job leaves it alone (checks again next pass) ──
+
+    [Fact]
+    public async Task Attempt_still_within_grace_is_left_untouched()
+    {
+        var triggeredAt = Now.AddMinutes(-5); // younger than the 10m delay — not yet due
+        var (_, attemptId) = SeedTriggeredAttempt(triggeredAt);
+
+        await BuildJob(ghlTestMode: false).RunAsync(default);
+
+        await using var ctx = _db.CreateContext();
+        var attempt = await ctx.DunningAttempts.FindAsync(attemptId);
+        attempt!.VerifiedAt.Should().BeNull();          // not verified
+        attempt.FailureReason.Should().BeNull();        // not escalated
+        (await ctx.InvestigationItems.AnyAsync()).Should().BeFalse();
+        (await ctx.AlertLog.AnyAsync()).Should().BeFalse();
+    }
+
     public void Dispose() => _db.Dispose();
 }

@@ -2,38 +2,79 @@
 
 Deferred work with context. Nothing here is forgotten — it is deliberately sequenced.
 
-## Deferred by CEO review (2026-07-24)
+## Ads Automation
 
 ### Automated ad-creation pipeline (v2 flagship)
-The other half of the business: campaigns build themselves from onboarding data, with one human review before launch. Deferred until the control plane (M0–M3.5) has earned operational trust.
 
-- Shape: campaign-template engine over the Meta Marketing API — create campaign/adset/ad from a package blueprint + client variables (city callouts → 11labs snippet, package → offer creative, radius/zip from onboarding); asset library for human hooks and callouts; mandatory human review gate before activation.
-- Effort: L (human ~3-4 wks / CC ~1-1.5 wks). Risk: High (Meta ad-creation APIs, ad review policies, creative assets, client-revenue-critical).
-- Prerequisites: onboarding pipeline (M4+) supplying structured inputs; stable Meta System User token; packages admin.
-- Origin: owner's brief — "Add then gets manually created by virtual assistant, would like to automate this as well maybe v2".
+**What:** Campaign-template engine over the Meta Marketing API — campaigns build themselves from onboarding data, with a mandatory human review gate before launch.
 
-### Stripe payout/fee/settlement reconciliation (from outside-voice review)
-The v1 ledger is receivables-vs-spend (charges in, Meta spend out, refunds/disputes reversed). True cash accounting — Stripe fees, payout timing, settlement failures, taxes — is bookkeeping-grade work deferred until the owner asks for it.
-- Effort: M (human ~1 wk / CC ~2 days). Priority: P3. Depends on: M1 ledger in production.
+**Why:** The other half of the business: removes the manual virtual-assistant step in ad creation. Origin: owner's brief — "Add then gets manually created by virtual assistant, would like to automate this as well maybe v2".
 
-## Test coverage debt — M2 (from /ship coverage audit, 2026-07-24)
+**Context:** Deferred by CEO review (2026-07-24) until the control plane (M0–M3.5) has earned operational trust. Shape: create campaign/adset/ad from a package blueprint + client variables (city callouts → 11labs snippet, package → offer creative, radius/zip from onboarding); asset library for human hooks and callouts; mandatory human review gate before activation. Risk: High (Meta ad-creation APIs, ad review policies, creative assets, client-revenue-critical).
 
-The M2 spine audited at ~56% path coverage. This session added 13 tests (dispatcher
-retry ladder + enforced backoff, kill-switch engage/release, action stager, F2
-delivery verification, Stripe webhook variants) and fixed two production bugs found
-during the audit (DunningAttempt immutability blocking F2; unenforced retry backoff).
-Remaining gaps, in priority order:
+**Effort:** L (human ~3-4 wks / CC ~1-1.5 wks)
+**Priority:** P3
+**Depends on:** Onboarding pipeline (M4+) supplying structured inputs; stable Meta System User token; packages admin
 
-- **P1 — `RD.Web/Services/MappingWizardService.cs` DB-write paths are untested.** Highest-risk untested write is `AddOrReplaceLink` (invalidate prior link + invalidate verification + demote client to Shadow, in one transaction); also `VerifyMapping` refusals/supersede, `PromoteToAssist` DB path, `ResolveDuplicateStripe`. Only the extracted pure helpers in `MappingLogic.cs` are covered. (A test agent was mid-write on these when the session hit a model limit.)
-- **P2 — dispatcher execution arms + sequence-group claiming.** `ExecuteResumeAsync`, `WriteGhlField`, `TriggerGhlWorkflow` happy/error arms, and ordered `SequenceGroup` claiming, are not directly exercised.
-- **P2 — gateway error paths.** `GhlGateway.TriggerWorkflowAsync` non-2xx handling; `MetaAdsGateway` resume + `GetCampaign` 404→null + non-convergence result.
-- **P3 — UI/E2E flows** [→E2E]: mapping wizard journey (select→suggest→link→verify→promote), kill-switch card engage/release, ActionQueue approve/dismiss snackbars incl. the AlreadyResolved race message.
+## Ledger & Billing
 
-## Hardening from /ship review (2026-07-24)
+### Stripe payout/fee/settlement reconciliation
 
-- **P2 — append-only enforcement is entity-granular, not column-granular.** `AppendOnlyInterceptor` blocks *any* modification of a `StrictlyImmutable` type, but append-only types that need lifecycle columns (`DunningAttempt`, `WebhookInboxItem`) were moved to deletes-only so their status columns can be written. That leaves their financial/identity columns (`DunningAttempt.Step`, `DueAt`, `DunningCaseId`) mutable in principle — no active corruption path today, but a future edit could silently break the audit trail. Close both with a per-type mutable-column allowlist in the interceptor.
-- **P3 — outbox lease recovery.** A dispatcher that crashes between claim and the try/catch leaves a row `Status='Leased'`; the claim query only matches `Status='Approved'` and there is no sweeper to reclaim an expired `LeaseUntil`. Pre-existing; add a recovery sweep. (`OutboxDispatcher.ClaimBatchAsync`)
-- **P4 — index coverage.** The outbox claim query now filters `NextAttemptAt`, which isn't in `IX_OutboxActions_Status_NotBefore_LeaseUntil`; it's a residual predicate. Immaterial at single-tenant M2 volumes; add `NextAttemptAt` to the index if outbox depth grows.
+**What:** True cash accounting — Stripe fees, payout timing, settlement failures, taxes.
 
-## Design-doc open questions awaiting owner answers (M0 Discovery Week)
-See "Open Questions" in the design doc (`~/.gstack/projects/IQTechSolutions-RocketDetailersV2/ivanr-main-design-20260724-000239.md`): master-account Meta payment method post-April-2026 (OQ1), Make scenario inventory (OQ2), trial semantics (OQ4), dunning + payment-link mechanics (OQ6), one-off vs subscription on trial close (OQ7), trial expiry data location (OQ8), Stripe key scopes (OQ9), GHL auth model (OQ10), billing model fixed vs metered (OQ11), ledger backfill depth (OQ12).
+**Why:** The v1 ledger is receivables-vs-spend (charges in, Meta spend out, refunds/disputes reversed). Bookkeeping-grade reconciliation is deliberately out of v1 scope.
+
+**Context:** From outside-voice review (2026-07-24). Deferred until the owner asks for it.
+
+**Effort:** M (human ~1 wk / CC ~2 days)
+**Priority:** P3
+**Depends on:** M1 ledger in production
+
+## Testing
+
+### M2 test coverage debt (from /ship coverage audit, 2026-07-24)
+
+**What:** Close the remaining untested paths in the M2 enforcement spine.
+
+**Why:** Untested enforcement paths touch client money and messaging; regressions there are silent and expensive.
+
+**Context:** The /ship audit measured ~56% path coverage. This work added 13 tests (dispatcher retry ladder + enforced backoff, kill-switch engage/release, action stager, F2 delivery verification, Stripe webhook variants) and fixed two production bugs found during the audit (DunningAttempt immutability blocking F2; unenforced retry backoff). Remaining gaps:
+- **P1** — `RD.Web/Services/MappingWizardService.cs` DB-write paths untested. Highest-risk is `AddOrReplaceLink` (invalidate prior link + invalidate verification + demote client to Shadow, in one transaction); also `VerifyMapping` refusals/supersede, `PromoteToAssist` DB path, `ResolveDuplicateStripe`. Only the pure helpers in `MappingLogic.cs` are covered.
+- **P2** — dispatcher execution arms + sequence-group claiming: `ExecuteResumeAsync`, `WriteGhlField`, `TriggerGhlWorkflow` happy/error arms, ordered `SequenceGroup` claiming.
+- **P2** — gateway error paths: `GhlGateway.TriggerWorkflowAsync` non-2xx; `MetaAdsGateway` resume + `GetCampaign` 404→null + non-convergence result.
+- **P3** — UI/E2E flows: mapping wizard journey (select→suggest→link→verify→promote), kill-switch card engage/release, ActionQueue approve/dismiss snackbars incl. the AlreadyResolved race message.
+
+**Priority:** P1 (highest remaining item)
+**Depends on:** —
+
+### Append-only enforcement hardening (from /ship review, 2026-07-24)
+
+**What:** Harden `AppendOnlyInterceptor` and outbox lease recovery.
+
+**Why:** Entity-granular immutability leaves lifecycle-bearing evidence rows partially unprotected, and a lease gap can strand outbox actions.
+
+**Context:**
+- **P2** — append-only enforcement is entity-granular, not column-granular. Append-only types that need lifecycle columns (`DunningAttempt`, `WebhookInboxItem`) are deletes-only, so their financial/identity columns (`DunningAttempt.Step`, `DueAt`, `DunningCaseId`) are mutable in principle — no active corruption path today, but a future edit could silently break the audit trail. Close with a per-type mutable-column allowlist in the interceptor.
+- **P3** — outbox lease recovery: a dispatcher that crashes between claim and the try/catch leaves a row `Status='Leased'`; the claim query only matches `Status='Approved'` and there is no sweeper to reclaim an expired `LeaseUntil`. Add a recovery sweep. (`OutboxDispatcher.ClaimBatchAsync`)
+- **P4** — index coverage: the outbox claim query now filters `NextAttemptAt`, which isn't in `IX_OutboxActions_Status_NotBefore_LeaseUntil`; add it if outbox depth grows.
+
+**Priority:** P2
+**Depends on:** —
+
+## Discovery (M0)
+
+### Design-doc open questions awaiting owner answers
+
+**What:** Resolve the design doc's open questions during M0 Discovery Week.
+
+**Why:** These answers gate trial, billing, and enforcement implementation choices.
+
+**Context:** See "Open Questions" in the design doc (`~/.gstack/projects/IQTechSolutions-RocketDetailersV2/ivanr-main-design-20260724-000239.md`): master-account Meta payment method post-April-2026 (OQ1), Make scenario inventory (OQ2), trial semantics (OQ4), dunning + payment-link mechanics (OQ6), one-off vs subscription on trial close (OQ7), trial expiry data location (OQ8), Stripe key scopes (OQ9), GHL auth model (OQ10), billing model fixed vs metered (OQ11), ledger backfill depth (OQ12).
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** Owner availability
+
+## Completed
+
+_(none yet)_

@@ -51,7 +51,14 @@ public class DunningCase
     public List<DunningAttempt> Attempts { get; set; } = [];
 }
 
-/// <summary>Append-only evidence: every dunning step with its verification trail.</summary>
+/// <summary>
+/// Append-only evidence: one row per dunning step, never deleted. The identity
+/// spine (DunningCaseId, Step, DueAt) is fixed at insert; the verification trail
+/// — TriggeredAt (stamped when the workflow fires), VerifiedAt/FailureReason
+/// (stamped by the delayed GHL delivery-verification job) — is filled in over
+/// the row's life. AppendOnlyInterceptor blocks deletes; these trail updates are
+/// permitted (mirrors the WebhookInboxItem status-field exception).
+/// </summary>
 public class DunningAttempt
 {
     public Guid Id { get; set; }
