@@ -1,0 +1,215 @@
+@page "/clients/{Id:guid}"
+@using RD.Domain
+@using RD.Domain.Entities
+@inject ClientDirectoryService Directory
+
+<PageTitle>Client — Rocket Detailer Control Plane</PageTitle>
+
+@if (_loading)
+{
+    <MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="72px" Class="mb-4" />
+    <MudGrid Spacing="3">
+        <MudItem xs="12" md="6"><MudPaper Elevation="1"><GridSkeleton Rows="5" /></MudPaper></MudItem>
+        <MudItem xs="12" md="6"><MudPaper Elevation="1"><GridSkeleton Rows="5" /></MudPaper></MudItem>
+    </MudGrid>
+}
+else if (_detail is null)
+{
+    <EmptyState Icon="@Icons.Material.Outlined.PersonOff" Title="Client not found"
+                Hint="This client doesn't exist (or the link is stale).">
+        <MudButton Variant="Variant.Outlined" Href="/clients" StartIcon="@Icons.Material.Filled.ArrowBack">Back to clients</MudButton>
+    </EmptyState>
+}
+else
+{
+    var c = _detail.Client;
+
+    <MudPaper Elevation="1" Class="pa-4 mb-4">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Href="/clients" aria-label="Back to clients" />
+            <MudText Typo="Typo.h5">@c.BusinessName</MudText>
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                     Color="@(c.ContractType == ContractType.Trial ? Color.Warning : Color.Success)">@c.ContractType</MudChip>
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                     Color="@(c.AccountType == AccountType.Master ? Color.Primary : Color.Default)">@c.AccountType account</MudChip>
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@(c.Country ?? "—") · @c.CurrencyCode</MudChip>
+            <ModeBadge Mode="@c.EnforcementMode" />
+            <MudSpacer />
+            @* Mode changes are gated on verified mappings — the control exists but stays honest about why it's locked. *@
+            <MudTooltip Arrow="true" Text="Mode changes unlock after mapping verification (M2). Until then every client stays where the ladder put them.">
+                <span>
+                    <MudSelect T="EnforcementMode" Value="@c.EnforcementMode" Disabled="true" Dense="true"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Label="Enforcement mode" Style="min-width:11rem;">
+                        <MudSelectItem T="EnforcementMode" Value="EnforcementMode.Shadow">Shadow — observe only</MudSelectItem>
+                        <MudSelectItem T="EnforcementMode" Value="EnforcementMode.Assist">Assist — human approves</MudSelectItem>
+                        <MudSelectItem T="EnforcementMode" Value="EnforcementMode.Auto">Auto — engine acts</MudSelectItem>
+                    </MudSelect>
+                </span>
+            </MudTooltip>
+        </MudStack>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2">
+            @(c.ContactName ?? "No contact name")
+            @if (!string.IsNullOrEmpty(c.Email)) { <span> · @c.Email</span> }
+            @if (!string.IsNullOrEmpty(c.Phone)) { <span> · @c.Phone</span> }
+        </MudText>
+    </MudPaper>
+
+    <MudGrid Spacing="3">
+        <MudItem xs="12" md="6">
+            <MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                    <MudText Typo="Typo.h6">Identity links</MudText>
+                    <HelpHint Text="How this client is known in each external system. A link must be active (not invalidated) for the engine to use it; verification pins it for enforcement." />
+                </MudStack>
+                @if (_detail.Links.Count == 0)
+                {
+                    <EmptyState Icon="@Icons.Material.Outlined.LinkOff" Title="No identity links"
+                                Hint="This client is invisible to the engine until at least a Stripe subscription is linked." />
+                }
+                else
+                {
+                    <MudSimpleTable Dense="true" Hover="true" Elevation="0">
+                        <thead>
+                            <tr><th>System</th><th>Kind</th><th>External id</th><th>Status</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var l in _detail.Links)
+                            {
+                                <tr>
+                                    <td>@l.System.Label()</td>
+                                    <td>@l.Kind.Label()</td>
+                                    <td><code style="font-size:.75rem;">@l.ExternalId</code></td>
+                                    <td>
+                                        @if (l.InvalidatedAt is not null)
+                                        {
+                                            <MudTooltip Arrow="true" Text="@($"Invalidated {l.InvalidatedAt:yyyy-MM-dd}. The engine ignores this link.")">
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error">Invalidated</MudChip>
+                                            </MudTooltip>
+                                        }
+                                        else if (l.VerifiedAt is not null)
+                                        {
+                                            <MudTooltip Arrow="true" Text="@($"Verified {l.VerifiedAt:yyyy-MM-dd} — pinned for enforcement.")">
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success">Verified</MudChip>
+                                            </MudTooltip>
+                                        }
+                                        else
+                                        {
+                                            <MudTooltip Arrow="true" Text="Imported but not yet human-verified. Verification is what unlocks Assist mode.">
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning">Unverified</MudChip>
+                                            </MudTooltip>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                }
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                    <MudText Typo="Typo.h6">Ledger</MudText>
+                    <HelpHint Text="Append-only money trail: charges in, ad spend out. Corrections are new compensating entries — history never changes." />
+                </MudStack>
+                @if (_detail.Ledger.Count == 0)
+                {
+                    <EmptyState Icon="@Icons.Material.Outlined.ReceiptLong"
+                                Title="No money movements recorded yet"
+                                Hint="The ledger starts with the first sync." />
+                }
+                else
+                {
+                    <MudTimeline TimelineOrientation="TimelineOrientation.Vertical" TimelinePosition="TimelinePosition.Start">
+                        @foreach (var entry in _detail.Ledger)
+                        {
+                            <MudTimelineItem Color="@LedgerColor(entry.Type)" Size="Size.Small" Variant="Variant.Filled">
+                                <ItemContent>
+                                    <MudText Typo="Typo.body2" Style="font-weight:600;">
+                                        @entry.Type.Label() · @Human.MoneySigned(entry.SignedAmount, entry.CurrencyCode)
+                                    </MudText>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                        @entry.OccurredAt.ToString("yyyy-MM-dd HH:mm") UTC · @entry.SourceSystem.Label()
+                                    </MudText>
+                                </ItemContent>
+                            </MudTimelineItem>
+                        }
+                    </MudTimeline>
+                }
+            </MudPaper>
+        </MudItem>
+
+        @if (_detail.Trials.Count > 0)
+        {
+            <MudItem xs="12" md="6">
+                <MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                        <MudText Typo="Typo.h6">Trial periods</MudText>
+                        <HelpHint Text="Trials suppress payment enforcement while active — but a trial with no expiry date is an investigation item, not a free pass." />
+                    </MudStack>
+                    <MudSimpleTable Dense="true" Elevation="0">
+                        <thead><tr><th>Starts</th><th>Expires</th><th>Spend cap</th><th>Outcome</th></tr></thead>
+                        <tbody>
+                            @foreach (var t in _detail.Trials)
+                            {
+                                <tr>
+                                    <td>@t.StartsAt.ToString("yyyy-MM-dd")</td>
+                                    <td>
+                                        @if (t.ExpiresAt is null)
+                                        {
+                                            <MudTooltip Arrow="true" Text="Unknown expiry — flagged for investigation. Enforcement needs the real date.">
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning">unknown</MudChip>
+                                            </MudTooltip>
+                                        }
+                                        else
+                                        {
+                                            @t.ExpiresAt.Value.ToString("yyyy-MM-dd")
+                                        }
+                                    </td>
+                                    <td>@(t.SpendCapSnapshot is null ? "—" : Human.MoneyKpi(t.SpendCapSnapshot.Value, c.CurrencyCode))</td>
+                                    <td><MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@t.Outcome</MudChip></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                </MudPaper>
+            </MudItem>
+        }
+
+        <MudItem xs="12" md="@(_detail.Trials.Count > 0 ? 6 : 12)">
+            <MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                    <MudText Typo="Typo.h6">Engine decisions</MudText>
+                    <HelpHint Text="Every policy evaluation for this client lands here with its evidence — the answer to 'why did the engine do that?'" />
+                </MudStack>
+                <EmptyState Icon="@Icons.Material.Outlined.Psychology"
+                            Title="Engine decisions will appear here — the 'Why?' trail"
+                            Hint="Once the eligibility policy runs (shadow first), every would-pause / would-resume / needs-investigation decision shows up with its evidence." />
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private ClientDetail? _detail;
+    private bool _loading = true;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        _detail = await Directory.GetDetailAsync(Id);
+        _loading = false;
+    }
+
+    private static Color LedgerColor(LedgerEntryType type) => type switch
+    {
+        LedgerEntryType.ChargePaid => Color.Success,
+        LedgerEntryType.ChargeFailed => Color.Error,
+        LedgerEntryType.AdSpend => Color.Info,
+        LedgerEntryType.Refund or LedgerEntryType.Dispute => Color.Warning,
+        _ => Color.Default,
+    };
+}

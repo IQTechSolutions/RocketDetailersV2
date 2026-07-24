@@ -1,0 +1,41 @@
+@* F6 first-run state: import progress + guided next step. Shown until the first sync completes. *@
+<MudPaper Class="pa-6" Elevation="1">
+    <MudStack Spacing="3">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.RocketLaunch" Color="Color.Primary" Size="Size.Large" />
+            <MudText Typo="Typo.h5">First run — let's get the engine ready</MudText>
+            <HelpHint Text="This panel shows until the first Stripe/Meta sync completes. Until then the engine has no money data and every client stays safely in Shadow mode." />
+        </MudStack>
+
+        <MudText Typo="Typo.body1" Class="mud-text-secondary">
+            Your 646 imported clients are here, but no sync has completed yet, so money numbers aren't live.
+            The best first move: fix identity mappings — billing can only protect clients whose Stripe subscription is linked.
+        </MudText>
+
+        <div>
+            <MudText Typo="Typo.subtitle2">
+                @Snapshot.ClientsLinked of @Snapshot.TotalClients clients linked
+            </MudText>
+            <MudProgressLinear Value="@_percent" Color="Color.Primary" Rounded="true" Size="Size.Large" Class="my-2"
+                               aria-label="@($"{Snapshot.ClientsLinked} of {Snapshot.TotalClients} clients linked")" />
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                A client counts as linked once it has an active Stripe subscription link — the thread that ties payments to ads.
+            </MudText>
+        </div>
+
+        <div>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                       StartIcon="@Icons.Material.Filled.Build" Href="/reconciliation">
+                Start here — fix mappings
+            </MudButton>
+        </div>
+    </MudStack>
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public CockpitSnapshot Snapshot { get; set; } = default!;
+
+    private double _percent => Snapshot.TotalClients == 0
+        ? 0
+        : 100.0 * Snapshot.ClientsLinked / Snapshot.TotalClients;
+}

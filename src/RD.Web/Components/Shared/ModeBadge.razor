@@ -1,0 +1,21 @@
+@using RD.Domain
+@* Shadow / Assist / Auto badge with the ladder explained on hover. *@
+<MudTooltip Arrow="true" Placement="Placement.Top" Text="@($"{Mode.Description()} {Human.LadderExplanation}")">
+    <MudChip T="string" Size="Size.Small" Variant="@_variant" Color="@_color" Class="rd-mode-badge">
+        @Mode.ToString().ToUpperInvariant()
+    </MudChip>
+</MudTooltip>
+
+@code {
+    [Parameter, EditorRequired] public EnforcementMode Mode { get; set; }
+
+    private Color _color => Mode switch
+    {
+        EnforcementMode.Shadow => Color.Default,
+        EnforcementMode.Assist => Color.Info,
+        EnforcementMode.Auto => Color.Success,
+        _ => Color.Default,
+    };
+
+    private Variant _variant => Mode == EnforcementMode.Auto ? Variant.Filled : Variant.Outlined;
+}

@@ -1,0 +1,31 @@
+@* Captures a resolution note before an item is marked Resolved/Dismissed — the audit trail everyone reads later. *@
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">@(Dismiss ? "Dismiss" : "Resolve"): @Item.Kind.Title()</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">@Item.Detail</MudText>
+        <MudTextField T="string" @bind-Value="_note" Lines="3" AutoFocus="true" Variant="Variant.Outlined"
+                      Label="@(Dismiss ? "Why is this safe to dismiss?" : "What did you do to fix it?")"
+                      HelperText="Written to the audit trail — future-you will thank present-you."
+                      Immediate="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="@(Dismiss ? Color.Default : Color.Primary)"
+                   Disabled="@string.IsNullOrWhiteSpace(_note)"
+                   OnClick="@(() => Dialog!.Close(DialogResult.Ok(_note!.Trim())))">
+            @(Dismiss ? "Dismiss item" : "Mark resolved")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    [Parameter, EditorRequired] public InvestigationRow Item { get; set; } = default!;
+    [Parameter] public bool Dismiss { get; set; }
+
+    private string? _note;
+}

@@ -1,0 +1,60 @@
+@page "/"
+@inject CockpitStateService StateService
+
+<PageTitle>Cockpit — Rocket Detailer Control Plane</PageTitle>
+
+@if (_snapshot is null)
+{
+    @* Loading: KPI skeletons + panel skeletons — never a blank page. *@
+    <MudGrid Spacing="3">
+        @for (var i = 0; i < 4; i++)
+        {
+            <MudItem xs="12" sm="6" md="3"><MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="110px" /></MudItem>
+        }
+        <MudItem xs="12" md="8"><MudPaper Elevation="1"><GridSkeleton Rows="5" /></MudPaper></MudItem>
+        <MudItem xs="12" md="4"><MudPaper Elevation="1"><GridSkeleton Rows="4" /></MudPaper></MudItem>
+    </MudGrid>
+}
+else if (_snapshot.State == CockpitState.FirstRun)
+{
+    <MudGrid Spacing="3">
+        <MudItem xs="12" md="8">
+            <CockpitFirstRun Snapshot="_snapshot" />
+        </MudItem>
+        <MudItem xs="12" md="4">
+            <MappingGapsPanel Gaps="_snapshot.MappingGaps" />
+        </MudItem>
+    </MudGrid>
+}
+else
+{
+    @if (_snapshot.State == CockpitState.Stale)
+    {
+        <CockpitStaleBanner Snapshot="_snapshot" />
+    }
+
+    <CockpitKpiRow Snapshot="_snapshot" />
+
+    <MudGrid Spacing="3" Class="mt-0">
+        <MudItem xs="12" md="8">
+            @if (_snapshot.OpenActionCount == 0)
+            {
+                <CockpitAllQuiet />
+            }
+            else
+            {
+                <ActionQueue />
+            }
+        </MudItem>
+        <MudItem xs="12" md="4">
+            <MappingGapsPanel Gaps="_snapshot.MappingGaps" />
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    private CockpitSnapshot? _snapshot;
+
+    protected override async Task OnInitializedAsync()
+        => _snapshot = await StateService.GetSnapshotAsync();
+}

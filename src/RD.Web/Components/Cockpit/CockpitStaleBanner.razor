@@ -1,0 +1,16 @@
+@* F6 error/stale state: name the system and since when — never show possibly-wrong numbers as fresh. *@
+<MudAlert Severity="Severity.Warning" Variant="Variant.Filled" Class="mb-4" Icon="@Icons.Material.Filled.History">
+    <b>Numbers may be outdated</b> — @_message
+    <MudText Typo="Typo.caption" Class="d-block mt-1" Style="opacity:.85;">
+        The freshness gate blocks Assist/Auto actions until a fresh sync lands — a dead sync job can never cause a pause.
+    </MudText>
+</MudAlert>
+
+@code {
+    [Parameter, EditorRequired] public CockpitSnapshot Snapshot { get; set; } = default!;
+
+    private string _message => string.Join(" · ", Snapshot.StaleSystems.Select(f =>
+        f.LastCompletedAt is null
+            ? $"{f.System.Label()} sync has never completed"
+            : $"{f.System.Label()} sync last completed {(int)Math.Round((Snapshot.ComputedAt - f.LastCompletedAt.Value).TotalMinutes)} min ago"));
+}

@@ -1,0 +1,117 @@
+@page "/clients"
+@using RD.Domain
+@inject ClientDirectoryService Directory
+@inject NavigationManager Nav
+
+<PageTitle>Clients — Rocket Detailer Control Plane</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+    <MudText Typo="Typo.h5">Clients</MudText>
+    <HelpHint Text="Every imported client with their contract, account type, enforcement mode and link health. Click a row for the full picture. Link chips show which external identities are present and active." />
+</MudStack>
+
+<MudPaper Elevation="1" Class="pa-4">
+    @if (_all is null)
+    {
+        <GridSkeleton Rows="10" />
+    }
+    else
+    {
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3" Wrap="Wrap.Wrap" Class="mb-3">
+            <MudTextField T="string" @bind-Value="_search" Placeholder="Search business or contact…"
+                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                          Immediate="true" DebounceInterval="200" Clearable="true"
+                          Style="max-width:20rem;" Margin="Margin.Dense" Variant="Variant.Outlined" />
+            <MudChipSet T="string" SelectionMode="SelectionMode.MultiSelection" @bind-SelectedValues="_filters"
+                        CheckMark="true" Variant="Variant.Text" Color="Color.Primary">
+                <MudChip Value="@("master")" Text="Master accounts" />
+                <MudChip Value="@("trials")" Text="Trials" />
+                <MudChip Value="@("unmapped")" Text="Unmapped" />
+            </MudChipSet>
+            <MudSpacer />
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">@_filtered.Count of @_all.Count clients</MudText>
+        </MudStack>
+
+        <MudDataGrid T="ClientListRow" Items="_filtered" Dense="true" Hover="true" Elevation="0"
+                     SortMode="SortMode.Single" RowClass="cursor-pointer"
+                     RowClick="@(e => Nav.NavigateTo($"/clients/{e.Item.Id}"))">
+            <Columns>
+                <PropertyColumn Property="x => x.BusinessName" Title="Business" />
+                <PropertyColumn Property="x => x.ContactName" Title="Contact" />
+                <TemplateColumn Title="Contract">
+                    <CellTemplate>
+                        <MudTooltip Arrow="true" Text="@(context.Item.ContractType == ContractType.Trial ? "On trial — payment enforcement is suppressed until the trial ends." : "Paying client — billing drives ads.")">
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                     Color="@(context.Item.ContractType == ContractType.Trial ? Color.Warning : Color.Success)">
+                                @context.Item.ContractType
+                            </MudChip>
+                        </MudTooltip>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Account">
+                    <CellTemplate>
+                        <MudTooltip Arrow="true" Text="@(context.Item.AccountType == AccountType.Master ? "Ads run on Rocket Detailer's master ad account — unbilled spend is our exposure." : "Client pays Meta directly — no exposure, no campaign enforcement.")">
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                     Color="@(context.Item.AccountType == AccountType.Master ? Color.Primary : Color.Default)">
+                                @context.Item.AccountType
+                            </MudChip>
+                        </MudTooltip>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Mode">
+                    <CellTemplate><ModeBadge Mode="@context.Item.Mode" /></CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Country · currency">
+                    <CellTemplate>
+                        <MudText Typo="Typo.body2">@(context.Item.Country ?? "—") · @context.Item.CurrencyCode</MudText>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Link health" Sortable="false">
+                    <CellTemplate>
+                        <PresenceChip Label="Stripe cus" Present="@context.Item.HasStripeCustomer" />
+                        <PresenceChip Label="Stripe sub" Present="@context.Item.HasStripeSubscription" />
+                        <PresenceChip Label="Meta" Present="@context.Item.HasMetaCampaign" />
+                        <PresenceChip Label="GHL" Present="@context.Item.HasGhlContact" />
+                    </CellTemplate>
+                </TemplateColumn>
+            </Columns>
+            <NoRecordsContent>
+                <EmptyState Icon="@Icons.Material.Outlined.PersonSearch"
+                            Title="No clients match these filters"
+                            Hint="Clear the search or filter chips to see all clients again." />
+            </NoRecordsContent>
+            <PagerContent>
+                <MudDataGridPager T="ClientListRow" PageSizeOptions="new[] { 25, 50, 100 }" />
+            </PagerContent>
+        </MudDataGrid>
+    }
+</MudPaper>
+
+@code {
+    private List<ClientListRow>? _all;
+    private string? _search;
+    private IReadOnlyCollection<string> _filters = [];
+
+    protected override async Task OnInitializedAsync()
+        => _all = await Directory.GetAllAsync();
+
+    private List<ClientListRow> _filtered
+    {
+        get
+        {
+            if (_all is null) return [];
+            IEnumerable<ClientListRow> q = _all;
+            if (_filters.Contains("master")) q = q.Where(c => c.AccountType == AccountType.Master);
+            if (_filters.Contains("trials")) q = q.Where(c => c.ContractType == ContractType.Trial);
+            if (_filters.Contains("unmapped")) q = q.Where(c => c.IsUnmapped);
+            if (!string.IsNullOrWhiteSpace(_search))
+            {
+                var s = _search.Trim();
+                q = q.Where(c =>
+                    c.BusinessName.Contains(s, StringComparison.OrdinalIgnoreCase)
+                    || (c.ContactName?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false));
+            }
+            return q.ToList();
+        }
+    }
+}

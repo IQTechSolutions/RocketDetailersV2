@@ -1,0 +1,14 @@
+@* F6 empty/quiet state for the action queue: positive, with a streak placeholder. *@
+<MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="1" Style="min-height:16rem;text-align:center;">
+    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Style="font-size:3.5rem;" />
+    <MudText Typo="Typo.h5" Class="mt-3">All quiet — every client paid ✓</MudText>
+    <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">
+        No proposed actions waiting. The engine keeps watching with every sync.
+    </MudText>
+    <MudTooltip Arrow="true" Text="Consecutive days with zero proposed actions and zero investigation flags. The counter starts once the engine has sync history to count.">
+        <MudChip T="string" Variant="Variant.Outlined" Color="Color.Success" Class="mt-4"
+                 Icon="@Icons.Material.Filled.LocalFireDepartment">
+            Clean streak: counting starts with sync history
+        </MudChip>
+    </MudTooltip>
+</MudPaper>
