@@ -132,6 +132,64 @@ public sealed class StripeWebhookIngestor(
         }
     }
 
+    /// <summary>
+    /// Operator replay of a poisoned event: re-run the side effects for a stored
+    /// inbox row and, on success, flip it to Processed. Side effects are idempotent
+    /// (ledger inserts dedup on source id; projections upsert), so a replay can
+    /// never double-apply money. On failure the row stays Poisoned with a bumped
+    /// attempt count and the fresh error — same guarantees as the receive path.
+    /// </summary>
+    public async Task<WebhookIngestResult> ReplayAsync(Guid inboxItemId, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var now = clock.UtcNow;
+
+        var item = await db.WebhookInbox.FirstOrDefaultAsync(w => w.Id == inboxItemId, ct);
+        if (item is null || item.Status == WebhookStatus.Processed)
+            return WebhookIngestResult.AlreadyProcessed;
+
+        var tx = await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            try
+            {
+                item.EntityRef = await ApplySideEffectsAsync(db, item.EventType, item.PayloadJson, now, ct);
+                item.Status = WebhookStatus.Processed;
+                item.ProcessedAt = now;
+                item.Attempts += 1;
+                item.LastError = null;
+                await db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+                return WebhookIngestResult.Processed;
+            }
+            catch (Exception processingError)
+            {
+                await tx.RollbackAsync(ct);
+                logger.LogError(processingError,
+                    "Replay of webhook {Id} ({EventType}) failed again", item.Id, item.EventType);
+                await BumpPoisonAttemptAsync(inboxItemId, processingError, ct);
+                return WebhookIngestResult.Poisoned;
+            }
+        }
+        finally
+        {
+            await tx.DisposeAsync();
+        }
+    }
+
+    /// <summary>Records a failed replay on the existing poison row (attempts + error) in a fresh context, surviving the rollback above.</summary>
+    private async Task BumpPoisonAttemptAsync(Guid inboxItemId, Exception error, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var item = await db.WebhookInbox.FirstOrDefaultAsync(w => w.Id == inboxItemId, CancellationToken.None);
+        if (item is null) return;
+        item.Attempts += 1;
+        item.LastError = Truncate(error.ToString(), ErrorMaxLength);
+        item.Status = WebhookStatus.Poisoned;
+        try { await db.SaveChangesAsync(CancellationToken.None); }
+        catch (DbUpdateException) { /* best-effort */ }
+    }
+
     private async Task<string?> ApplySideEffectsAsync(
         RdDbContext db, string eventType, string payloadJson, DateTimeOffset now, CancellationToken ct)
     {

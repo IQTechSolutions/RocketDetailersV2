@@ -120,13 +120,14 @@ public static class MetaLinkRunner
         var now = DateTimeOffset.UtcNow;
         int linked = 0, clientsLinked = 0, clientsNoMapping = 0, staleNotFound = 0, conflicts = 0, alreadyLinked = 0, flags = 0;
 
-        void Flag(Guid? clientId, InvestigationKind kind, string detail)
+        void Flag(Guid? clientId, InvestigationKind kind, string detail, string? externalId = null)
         {
             if (detail.Length > 1000) detail = detail[..997] + "...";
             if (!existingFlags.Add((clientId, kind, detail))) return; // identical open flag already present
             db.InvestigationItems.Add(new InvestigationItem
             {
                 Id = Guid.NewGuid(), ClientId = clientId, Kind = kind, Detail = detail, CreatedAt = now,
+                System = externalId is null ? null : ExternalSystem.Meta, ExternalId = externalId,
             });
             flags++;
         }
@@ -144,7 +145,8 @@ public static class MetaLinkRunner
                 if (!liveIds.Contains(campId))
                 {
                     Flag(clientId, InvestigationKind.StaleSync,
-                        $"Sheet maps Meta campaign {campId} to this client, but it is not in the master ad account — own-account client or a stale campaign id. Reconcile.");
+                        $"Sheet maps Meta campaign {campId} to this client, but it is not in the master ad account — own-account client or a stale campaign id. Reconcile.",
+                        externalId: campId);
                     staleNotFound++;
                     continue;
                 }
@@ -154,7 +156,8 @@ public static class MetaLinkRunner
                     else
                     {
                         Flag(clientId, InvestigationKind.ImportConflict,
-                            $"Meta campaign {campId} is mapped to this client but already linked to another client ({owner}). Resolve which owns it.");
+                            $"Meta campaign {campId} is mapped to this client but already linked to another client ({owner}). Resolve which owns it.",
+                            externalId: campId);
                         conflicts++;
                     }
                     continue;

@@ -14,7 +14,9 @@ public sealed record InvestigationRow(
     string? ResolvedBy,
     string? ResolutionNote,
     Guid? ClientId,
-    string? ClientName);
+    string? ClientName,
+    ExternalSystem? System,
+    string? ExternalId);
 
 /// <summary>
 /// The reconciliation work queue. This is the ONLY service in the UI that
@@ -37,7 +39,8 @@ public class ReconciliationService(IDbContextFactory<RdDbContext> factory, ICloc
                       select new InvestigationRow(
                           i.Id, i.Kind, i.Detail, i.Status, i.CreatedAt,
                           i.ResolvedAt, i.ResolvedBy, i.ResolutionNote,
-                          i.ClientId, c != null ? c.BusinessName : null))
+                          i.ClientId, c != null ? c.BusinessName : null,
+                          i.System, i.ExternalId))
             .ToListAsync(ct);
     }
 

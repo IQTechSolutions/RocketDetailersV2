@@ -17,7 +17,7 @@ namespace RD.Web.Services;
 /// Host registration (Program.cs, added during integration — NOT in this commit):
 ///   builder.Services.AddScoped&lt;MappingWizardService&gt;();
 /// </summary>
-public class MappingWizardService(IDbContextFactory<RdDbContext> factory, IClock clock)
+public class MappingWizardService(IDbContextFactory<RdDbContext> factory, IClock clock, VendorLinks vendorLinks)
 {
     /// <summary>Verifier stamp until Identity (real user names) lands — matches ReconciliationService.</summary>
     private const string DefaultActor = "operator";
@@ -123,12 +123,17 @@ public class MappingWizardService(IDbContextFactory<RdDbContext> factory, IClock
                 g => g.Key,
                 g => g.Sum(i => i.Spend) / Math.Max(1, g.Select(i => i.Date).Distinct().Count())); // avg daily over observed days
 
-        var lastMessageByContact = (await db.GhlMessages.AsNoTracking()
-                .Where(m => contactIds.Contains(m.ContactId))
-                .GroupBy(m => m.ContactId)
-                .Select(g => new { ContactId = g.Key, LastSentAt = g.Max(m => m.SentAt), Count = g.Count() })
-                .ToListAsync(ct))
-            .ToDictionary(x => x.ContactId, x => (x.LastSentAt, x.Count));
+        var ghlRows = await db.GhlMessages.AsNoTracking()
+            .Where(m => contactIds.Contains(m.ContactId))
+            .Select(m => new { m.ContactId, m.LocationId, m.SentAt })
+            .ToListAsync(ct);
+        var lastMessageByContact = ghlRows
+            .GroupBy(m => m.ContactId)
+            .ToDictionary(g => g.Key, g => (LastSentAt: g.Max(m => m.SentAt), Count: g.Count()));
+        // GHL contact deep-links are location-scoped — resolve each contact's location from its observed messages.
+        var ghlLocationByContact = ghlRows
+            .GroupBy(m => m.ContactId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(m => m.SentAt).First().LocationId);
 
         var now = clock.UtcNow;
 
@@ -144,7 +149,12 @@ public class MappingWizardService(IDbContextFactory<RdDbContext> factory, IClock
             Verified: l.VerifiedAt is not null,
             Invalidated: l.InvalidatedAt is not null,
             l.VerifiedAt,
-            Evidence: ResolveEvidence(l, subs, campaignFacts, lastMessageByContact, now, client.CurrencyCode)))
+            Evidence: ResolveEvidence(l, subs, campaignFacts, lastMessageByContact, now, client.CurrencyCode),
+            ExternalUrl: vendorLinks.For(
+                l.System, l.Kind, l.ExternalId,
+                l.System == ExternalSystem.Ghl && l.Kind == LinkKind.Contact
+                    ? ghlLocationByContact.GetValueOrDefault(l.ExternalId)
+                    : null)))
             .ToList();
 
         var requiredSlots = RequiredLinks.All.Select(spec =>
@@ -282,6 +292,37 @@ public class MappingWizardService(IDbContextFactory<RdDbContext> factory, IClock
         };
 
         return LinkSuggester.Rank(client.BusinessName, candidates);
+    }
+
+    /// <summary>
+    /// The client's active Stripe customer links, each with a short evidence line,
+    /// offered as the "keep this one" choices when resolving a duplicate-Stripe
+    /// investigation. Fewer than two means there's nothing to dedupe (close it as
+    /// a normal investigation instead).
+    /// </summary>
+    public async Task<IReadOnlyList<StripeCustomerCandidate>> GetStripeCustomerCandidates(Guid clientId, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+
+        var customerLinks = await db.IdentityLinks.AsNoTracking()
+            .Where(l => l.ClientId == clientId && l.System == ExternalSystem.Stripe && l.Kind == LinkKind.Customer && l.InvalidatedAt == null)
+            .OrderBy(l => l.CreatedAt)
+            .ToListAsync(ct);
+        if (customerLinks.Count == 0) return [];
+
+        var customerIds = customerLinks.Select(l => l.ExternalId).ToList();
+        var subs = await db.StripeSubscriptions.AsNoTracking()
+            .Where(s => customerIds.Contains(s.CustomerId))
+            .ToListAsync(ct);
+
+        return customerLinks.Select(l =>
+        {
+            var mine = subs.Where(s => s.CustomerId == l.ExternalId).ToList();
+            var detail = mine.Count == 0
+                ? "No subscriptions synced for this customer yet."
+                : $"{mine.Count} subscription(s) · {string.Join(", ", mine.Select(s => s.Status).Distinct())}";
+            return new StripeCustomerCandidate(l.ExternalId, detail);
+        }).ToList();
     }
 
     // ---------------- Writes ----------------

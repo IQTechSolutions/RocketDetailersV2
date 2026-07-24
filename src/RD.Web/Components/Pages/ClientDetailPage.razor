@@ -2,7 +2,11 @@
 @attribute [Authorize]
 @using RD.Domain
 @using RD.Domain.Entities
+@using RD.Web.Components.Dialogs
 @inject ClientDirectoryService Directory
+@inject TrialAdminService Trials
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
 
 <PageTitle>Client — Rocket Detailer Control Plane</PageTitle>
 
@@ -55,6 +59,53 @@ else
         </MudText>
     </MudPaper>
 
+    @* ---- Account health: what's currently wrong with this account. ---- *@
+    <MudPaper Elevation="1" Class="pa-4 mb-4">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+            <MudIcon Icon="@(_detail.Health.IsHealthy ? Icons.Material.Filled.HealthAndSafety : Icons.Material.Filled.ReportProblem)"
+                     Color="@(_detail.Health.IsHealthy ? Color.Success : Color.Warning)" />
+            <MudText Typo="Typo.h6">Account health</MudText>
+            <HelpHint Text="Everything currently blocking this client from clean, enforceable operation: missing or unverified required links and open reconciliation items. Clear these to let the client climb the enforcement ladder." />
+            <MudSpacer />
+            @if (!_detail.Health.IsHealthy)
+            {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Error">
+                    @_detail.Health.Issues.Count @(_detail.Health.Issues.Count == 1 ? "issue" : "issues")
+                </MudChip>
+            }
+        </MudStack>
+
+        @if (_detail.Health.IsHealthy)
+        {
+            <MudAlert Severity="Severity.Success" Variant="Variant.Text" Dense="true" Icon="@Icons.Material.Filled.CheckCircle">
+                No open issues — this account's required links are in place and verified, with nothing in the reconciliation queue.
+            </MudAlert>
+        }
+        else
+        {
+            <MudStack Spacing="2">
+                @foreach (var issue in _detail.Health.Issues)
+                {
+                    <MudAlert Severity="@IssueSeverity(issue.Severity)" Variant="Variant.Outlined" Dense="true">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                            <div style="flex:1;min-width:16rem;">
+                                <MudText Typo="Typo.body2" Style="font-weight:600;">@issue.Title</MudText>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block" Style="white-space:normal;">@issue.Detail</MudText>
+                            </div>
+                            @if (!string.IsNullOrEmpty(issue.FixHref))
+                            {
+                                <MudButton Href="@issue.FixHref" Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                                           EndIcon="@Icons.Material.Filled.ArrowForward">
+                                    @issue.FixLabel
+                                </MudButton>
+                            }
+                        </MudStack>
+                    </MudAlert>
+                }
+            </MudStack>
+        }
+    </MudPaper>
+
     <MudGrid Spacing="3">
         <MudItem xs="12" md="6">
             <MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
@@ -79,7 +130,17 @@ else
                                 <tr>
                                     <td>@l.System.Label()</td>
                                     <td>@l.Kind.Label()</td>
-                                    <td><code style="font-size:.75rem;">@l.ExternalId</code></td>
+                                    <td>
+                                        <code style="font-size:.75rem;">@l.ExternalId</code>
+                                        @if (_detail.ExternalLinks.TryGetValue(l.Id, out var url))
+                                        {
+                                            <MudTooltip Arrow="true" Text="@VendorLinks.Label(l.System)">
+                                                <MudIconButton Href="@url" Target="_blank" rel="noopener noreferrer"
+                                                               Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" Class="ml-1"
+                                                               aria-label="@VendorLinks.Label(l.System)" />
+                                            </MudTooltip>
+                                        }
+                                    </td>
                                     <td>
                                         @if (l.InvalidatedAt is not null)
                                         {
@@ -167,6 +228,14 @@ else
                                         {
                                             @t.ExpiresAt.Value.ToString("yyyy-MM-dd")
                                         }
+                                        <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
+                                            <MudTooltip Arrow="true" Text="@(t.ExpiresAt is null ? "Set the trial expiry date" : "Change the trial expiry date")">
+                                                <MudIconButton Icon="@Icons.Material.Filled.EditCalendar" Size="Size.Small"
+                                                               Color="@(t.ExpiresAt is null ? Color.Warning : Color.Default)"
+                                                               OnClick="@(() => HandleSetExpiryAsync(t))"
+                                                               aria-label="Set trial expiry" />
+                                            </MudTooltip>
+                                        </AuthorizeView>
                                     </td>
                                     <td>@(t.SpendCapSnapshot is null ? "—" : Human.MoneyKpi(t.SpendCapSnapshot.Value, c.CurrencyCode))</td>
                                     <td><MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@t.Outcome</MudChip></td>
@@ -205,6 +274,29 @@ else
         _loading = false;
     }
 
+    private async Task ReloadAsync()
+    {
+        _detail = await Directory.GetDetailAsync(Id);
+        StateHasChanged();
+    }
+
+    private async Task HandleSetExpiryAsync(TrialPeriod trial)
+    {
+        var parameters = new DialogParameters<SetTrialExpiryDialog>
+        {
+            { d => d.MinDate, trial.StartsAt.UtcDateTime.Date },
+            { d => d.Initial, trial.ExpiresAt?.UtcDateTime.Date },
+        };
+        var dialog = await Dialogs.ShowAsync<SetTrialExpiryDialog>(null, parameters);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not DateTime picked) return;
+
+        var expiresAt = new DateTimeOffset(DateTime.SpecifyKind(picked.Date, DateTimeKind.Utc));
+        var write = await Trials.SetExpiryAsync(trial.Id, expiresAt);
+        Snackbar.Add(write.Message, write.Ok ? Severity.Success : Severity.Warning);
+        if (write.Ok) await ReloadAsync();
+    }
+
     private static Color LedgerColor(LedgerEntryType type) => type switch
     {
         LedgerEntryType.ChargePaid => Color.Success,
@@ -212,5 +304,12 @@ else
         LedgerEntryType.AdSpend => Color.Info,
         LedgerEntryType.Refund or LedgerEntryType.Dispute => Color.Warning,
         _ => Color.Default,
+    };
+
+    private static Severity IssueSeverity(AccountIssueSeverity severity) => severity switch
+    {
+        AccountIssueSeverity.Error => Severity.Error,
+        AccountIssueSeverity.Warning => Severity.Warning,
+        _ => Severity.Info,
     };
 }

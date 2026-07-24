@@ -77,12 +77,13 @@ public static class GhlLinkRunner
         var now = DateTimeOffset.UtcNow;
         int linked = 0, clientsNoMapping = 0, alreadyLinked = 0, conflicts = 0, multiContact = 0, flags = 0;
 
-        void Flag(Guid clientId, InvestigationKind kind, string detail)
+        void Flag(Guid clientId, InvestigationKind kind, string detail, string? externalId = null)
         {
             if (detail.Length > 1000) detail = detail[..997] + "...";
             db.InvestigationItems.Add(new InvestigationItem
             {
                 Id = Guid.NewGuid(), ClientId = clientId, Kind = kind, Detail = detail, CreatedAt = now,
+                System = externalId is null ? null : ExternalSystem.Ghl, ExternalId = externalId,
             });
             flags++;
         }
@@ -103,7 +104,8 @@ public static class GhlLinkRunner
                 if (contactOwner.TryGetValue(contactId, out var owner) && owner != clientId)
                 {
                     Flag(clientId, InvestigationKind.ImportConflict,
-                        $"GHL contact {contactId} maps to this client but is already linked to another client ({owner}). Resolve which owns it.");
+                        $"GHL contact {contactId} maps to this client but is already linked to another client ({owner}). Resolve which owns it.",
+                        externalId: contactId);
                     conflicts++;
                     continue;
                 }
@@ -124,7 +126,8 @@ public static class GhlLinkRunner
             if (mapped.Count > 1)
             {
                 Flag(clientId, InvestigationKind.Other,
-                    $"Client maps to {mapped.Count} GHL contacts ({string.Join(", ", mapped)}); linked {chosen} as primary — confirm.");
+                    $"Client maps to {mapped.Count} GHL contacts ({string.Join(", ", mapped)}); linked {chosen} as primary — confirm.",
+                    externalId: chosen);
                 multiContact++;
             }
         }

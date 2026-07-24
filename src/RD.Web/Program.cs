@@ -59,6 +59,9 @@ builder.Services.AddScoped<ClientDirectoryService>();
 builder.Services.AddScoped<ReconciliationService>();
 builder.Services.AddScoped<MappingWizardService>();
 builder.Services.AddScoped<AnalyticsService>();
+builder.Services.AddScoped<TrialAdminService>();
+builder.Services.AddScoped<OpsService>();
+builder.Services.AddSingleton<VendorLinks>();
 
 // Lane A gateways + sync jobs + the policy heartbeat + M2 enforcement services
 // (dispatcher, approval CAS, kill switch, state builder, stager).

@@ -1,0 +1,254 @@
+@page "/ops"
+@attribute [Authorize]
+@using RD.Domain
+@inject OpsService OpsSvc
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+
+<PageTitle>Operations — Rocket Detailer Control Plane</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+    <MudText Typo="Typo.h5">Operations</MudText>
+    <HelpHint Text="Where failures that would otherwise be invisible surface for a human: enforcement writes that permanently failed, webhook events that threw while processing, and vendor sync sweeps that errored. Each row can be acted on — retried, replayed, or re-run." />
+</MudStack>
+
+@* ─────────────── Dead-lettered actions ─────────────── *@
+<MudPaper Elevation="1" Class="pa-4 mb-4">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+        <MudIcon Icon="@Icons.Material.Filled.Dangerous" Color="@(_deadLetters is { Count: > 0 } ? Color.Error : Color.Success)" />
+        <MudText Typo="Typo.h6">Dead-lettered actions</MudText>
+        <HelpHint Text="External writes (pause/resume ads, dunning steps) that failed permanently — either a safety refusal or too many retries. Retry re-queues the action; the dispatcher revalidates against live policy before it acts, so a stale action is superseded, not blindly executed." />
+        <MudSpacer />
+        @if (_deadLetters is not null)
+        {
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                     Color="@(_deadLetters.Count > 0 ? Color.Error : Color.Default)">@_deadLetters.Count</MudChip>
+        }
+    </MudStack>
+
+    @if (_deadLetters is null)
+    {
+        <GridSkeleton Rows="3" />
+    }
+    else if (_deadLetters.Count == 0)
+    {
+        <MudAlert Severity="Severity.Success" Variant="Variant.Text" Dense="true" Icon="@Icons.Material.Filled.CheckCircle">
+            No dead-lettered actions — every external write has landed or is still in flight.
+        </MudAlert>
+    }
+    else
+    {
+        <MudSimpleTable Dense="true" Hover="true" Elevation="0">
+            <thead>
+                <tr><th>Action</th><th>Client</th><th>Attempts</th><th>Last error</th><th>When</th><th></th></tr>
+            </thead>
+            <tbody>
+                @foreach (var a in _deadLetters)
+                {
+                    <tr>
+                        <td>@a.ActionType.Label()</td>
+                        <td><MudLink Href="@($"/clients/{a.ClientId}")" Typo="Typo.body2">@a.ClientName</MudLink></td>
+                        <td>@a.Attempts</td>
+                        <td><MudText Typo="Typo.caption" Class="mud-text-secondary" Style="max-width:26rem;white-space:normal;display:inline-block;">@(a.LastError ?? "—")</MudText></td>
+                        <td><MudText Typo="Typo.caption" Class="mud-text-secondary">@a.CreatedAt.ToString("yyyy-MM-dd HH:mm")</MudText></td>
+                        <td>
+                            <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
+                                <Authorized>
+                                    <MudStack Row="true" Spacing="1">
+                                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                                   StartIcon="@Icons.Material.Filled.Replay"
+                                                   OnClick="@(() => RetryActionAsync(a))">Retry</MudButton>
+                                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                                                   OnClick="@(() => DismissActionAsync(a))">Dismiss</MudButton>
+                                    </MudStack>
+                                </Authorized>
+                                <NotAuthorized>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">Operator only</MudText>
+                                </NotAuthorized>
+                            </AuthorizeView>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    }
+</MudPaper>
+
+@* ─────────────── Poisoned webhooks ─────────────── *@
+<MudPaper Elevation="1" Class="pa-4 mb-4">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+        <MudIcon Icon="@Icons.Material.Filled.Coronavirus" Color="@(_poisoned is { Count: > 0 } ? Color.Error : Color.Success)" />
+        <MudText Typo="Typo.h6">Poisoned webhooks</MudText>
+        <HelpHint Text="Vendor webhook events that threw while being processed. The payload is kept and nothing was half-applied. Replay re-runs the side effects — money is never double-counted (ledger inserts dedupe, projections upsert)." />
+        <MudSpacer />
+        @if (_poisoned is not null)
+        {
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                     Color="@(_poisoned.Count > 0 ? Color.Error : Color.Default)">@_poisoned.Count</MudChip>
+        }
+    </MudStack>
+
+    @if (_poisoned is null)
+    {
+        <GridSkeleton Rows="3" />
+    }
+    else if (_poisoned.Count == 0)
+    {
+        <MudAlert Severity="Severity.Success" Variant="Variant.Text" Dense="true" Icon="@Icons.Material.Filled.CheckCircle">
+            No poisoned webhooks — every event has processed cleanly.
+        </MudAlert>
+    }
+    else
+    {
+        <MudSimpleTable Dense="true" Hover="true" Elevation="0">
+            <thead>
+                <tr><th>System</th><th>Event type</th><th>Event id</th><th>Attempts</th><th>Last error</th><th>Received</th><th></th></tr>
+            </thead>
+            <tbody>
+                @foreach (var w in _poisoned)
+                {
+                    <tr>
+                        <td>@w.System.Label()</td>
+                        <td>@w.EventType</td>
+                        <td><code style="font-size:.72rem;">@w.ExternalEventId</code></td>
+                        <td>@w.Attempts</td>
+                        <td><MudText Typo="Typo.caption" Class="mud-text-secondary" Style="max-width:24rem;white-space:normal;display:inline-block;">@(w.LastError ?? "—")</MudText></td>
+                        <td><MudText Typo="Typo.caption" Class="mud-text-secondary">@w.ReceivedAt.ToString("yyyy-MM-dd HH:mm")</MudText></td>
+                        <td>
+                            <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
+                                <Authorized>
+                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                               StartIcon="@Icons.Material.Filled.Replay"
+                                               OnClick="@(() => ReplayWebhookAsync(w))">Replay</MudButton>
+                                </Authorized>
+                                <NotAuthorized>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">Operator only</MudText>
+                                </NotAuthorized>
+                            </AuthorizeView>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    }
+</MudPaper>
+
+@* ─────────────── Sync runs ─────────────── *@
+<MudPaper Elevation="1" Class="pa-4 mb-4">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap" Class="mb-2">
+        <MudIcon Icon="@Icons.Material.Filled.Sync" Color="@(_syncRuns is not null && _syncRuns.Any(s => s.Status == SyncRunStatus.Failed) ? Color.Warning : Color.Success)" />
+        <MudText Typo="Typo.h6">Sync runs</MudText>
+        <HelpHint Text="Recent vendor sync sweeps. A failed sweep leaves projections stale, which is what trips StaleSync investigations and the cockpit's freshness gate. Run one now to recover without waiting for the schedule." />
+        <MudSpacer />
+        <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
+            <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Run now:</MudText>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => TriggerSyncAsync(ExternalSystem.Stripe))">Stripe</MudButton>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => TriggerSyncAsync(ExternalSystem.Meta))">Meta</MudButton>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => TriggerSyncAsync(ExternalSystem.Ghl))">GHL</MudButton>
+            </MudStack>
+        </AuthorizeView>
+    </MudStack>
+
+    @if (_syncRuns is null)
+    {
+        <GridSkeleton Rows="4" />
+    }
+    else if (_syncRuns.Count == 0)
+    {
+        <EmptyState Icon="@Icons.Material.Outlined.Sync"
+                    Title="No sync runs recorded yet"
+                    Hint="The first sweep of each vendor lands here with its status and item count." />
+    }
+    else
+    {
+        <MudSimpleTable Dense="true" Hover="true" Elevation="0">
+            <thead>
+                <tr><th>System</th><th>Status</th><th>Started</th><th>Completed</th><th>Items</th><th>Error</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var s in _syncRuns)
+                {
+                    <tr>
+                        <td>@s.System.Label()</td>
+                        <td>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@SyncColor(s.Status)">@s.Status</MudChip>
+                        </td>
+                        <td><MudText Typo="Typo.caption" Class="mud-text-secondary">@s.StartedAt.ToString("yyyy-MM-dd HH:mm")</MudText></td>
+                        <td><MudText Typo="Typo.caption" Class="mud-text-secondary">@(s.CompletedAt?.ToString("yyyy-MM-dd HH:mm") ?? "—")</MudText></td>
+                        <td>@s.ItemsSeen</td>
+                        <td><MudText Typo="Typo.caption" Class="mud-text-secondary" Style="max-width:24rem;white-space:normal;display:inline-block;">@(s.Error ?? "")</MudText></td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    }
+</MudPaper>
+
+@code {
+    private List<DeadLetterRow>? _deadLetters;
+    private List<PoisonedWebhookRow>? _poisoned;
+    private List<SyncRunRow>? _syncRuns;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _deadLetters = await OpsSvc.GetDeadLetteredAsync();
+        _poisoned = await OpsSvc.GetPoisonedWebhooksAsync();
+        _syncRuns = await OpsSvc.GetRecentSyncRunsAsync();
+    }
+
+    private async Task RetryActionAsync(DeadLetterRow a)
+    {
+        var ok = await Dialogs.ShowMessageBoxAsync(
+            "Retry action?",
+            $"Re-queue this {a.ActionType.Label()} for {a.ClientName}. The dispatcher revalidates against live policy before it writes anything.",
+            yesText: "Retry", cancelText: "Cancel");
+        if (ok != true) return;
+
+        var result = await OpsSvc.RetryActionAsync(a.Id);
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        await LoadAsync();
+    }
+
+    private async Task DismissActionAsync(DeadLetterRow a)
+    {
+        var ok = await Dialogs.ShowMessageBoxAsync(
+            "Dismiss action?",
+            $"Close this dead-lettered {a.ActionType.Label()} for {a.ClientName} without retrying. It won't be executed.",
+            yesText: "Dismiss", cancelText: "Cancel");
+        if (ok != true) return;
+
+        var result = await OpsSvc.DismissActionAsync(a.Id, "Dismissed from Operations.");
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        await LoadAsync();
+    }
+
+    private async Task ReplayWebhookAsync(PoisonedWebhookRow w)
+    {
+        var ok = await Dialogs.ShowMessageBoxAsync(
+            "Replay webhook?",
+            $"Re-run the side effects for {w.EventType} ({w.ExternalEventId}). This is idempotent — money is never double-counted.",
+            yesText: "Replay", cancelText: "Cancel");
+        if (ok != true) return;
+
+        var result = await OpsSvc.ReplayWebhookAsync(w.Id);
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Error);
+        await LoadAsync();
+    }
+
+    private async Task TriggerSyncAsync(ExternalSystem system)
+    {
+        var result = OpsSvc.TriggerSync(system);
+        Snackbar.Add(result.Message, result.Ok ? Severity.Info : Severity.Warning);
+        await LoadAsync();
+    }
+
+    private static Color SyncColor(SyncRunStatus status) => status switch
+    {
+        SyncRunStatus.Completed => Color.Success,
+        SyncRunStatus.Failed => Color.Error,
+        _ => Color.Info,
+    };
+}

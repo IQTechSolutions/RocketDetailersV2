@@ -54,7 +54,8 @@ public sealed record LinkView(
     bool Verified,
     bool Invalidated,
     DateTimeOffset? VerifiedAt,
-    string Evidence);
+    string Evidence,
+    string? ExternalUrl = null);
 
 /// <summary>One of the four required-link slots, with the active link filling it (or null when missing).</summary>
 public sealed record RequiredSlot(
@@ -113,6 +114,9 @@ public sealed record ClientMappingDetail(
 
 /// <summary>A candidate external id the wizard can suggest for a missing link, before name ranking.</summary>
 public sealed record SuggestionCandidate(string ExternalId, string Label, DateTimeOffset SyncedAt, string? Detail = null);
+
+/// <summary>One of a client's active Stripe customers, offered as the "keep this one" choice when resolving a duplicate-customer investigation.</summary>
+public sealed record StripeCustomerCandidate(string ExternalId, string Detail);
 
 /// <summary>A ranked link suggestion the operator can accept — best-effort, always labeled as a suggestion.</summary>
 public sealed record LinkSuggestion(string ExternalId, string Label, string? Detail, double Score, string Rationale);

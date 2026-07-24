@@ -3,6 +3,8 @@
 @using RD.Domain
 @using RD.Web.Components.Dialogs
 @inject ReconciliationService Recon
+@inject MappingWizardService Wizard
+@inject VendorLinks Vendor
 @inject IDialogService Dialogs
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
@@ -80,6 +82,16 @@
                 <TemplateColumn Title="Detail">
                     <CellTemplate>
                         <MudText Typo="Typo.body2" Style="max-width:32rem;white-space:normal;">@context.Item.Detail</MudText>
+                        @if (context.Item.System is ExternalSystem sys
+                             && !string.IsNullOrEmpty(context.Item.ExternalId)
+                             && Vendor.ForSystem(sys, context.Item.ExternalId!) is string url)
+                        {
+                            <MudLink Href="@url" Target="_blank" rel="noopener noreferrer" Typo="Typo.caption"
+                                     Class="d-inline-flex align-center mt-1">
+                                <MudIcon Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" Class="mr-1" />
+                                @VendorLinks.Label(sys) to double-check
+                            </MudLink>
+                        }
                     </CellTemplate>
                 </TemplateColumn>
                 <TemplateColumn Title="Opened">
@@ -92,10 +104,20 @@
                     <TemplateColumn Title="" Sortable="false">
                         <CellTemplate>
                             <MudStack Row="true" Spacing="1">
-                                <MudTooltip Arrow="true" Text="Mark fixed, with a note for the audit trail.">
-                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
-                                               OnClick="@(() => HandleAsync(context.Item, dismiss: false))">Resolve</MudButton>
-                                </MudTooltip>
+                                @if (context.Item.Kind == InvestigationKind.DuplicateStripeCustomer)
+                                {
+                                    <MudTooltip Arrow="true" Text="Pick which Stripe customer to keep; the duplicates are invalidated.">
+                                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                                   OnClick="@(() => HandleDuplicateStripeAsync(context.Item))">Resolve…</MudButton>
+                                    </MudTooltip>
+                                }
+                                else
+                                {
+                                    <MudTooltip Arrow="true" Text="Mark fixed, with a note for the audit trail.">
+                                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                                   OnClick="@(() => HandleAsync(context.Item, dismiss: false))">Resolve</MudButton>
+                                    </MudTooltip>
+                                }
                                 <MudTooltip Arrow="true" Text="Not a real problem — close it with a note saying why.">
                                     <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
                                                OnClick="@(() => HandleAsync(context.Item, dismiss: true))">Dismiss</MudButton>
@@ -177,6 +199,37 @@
     private async Task OnStatusChanged(string view)
     {
         _statusView = view;
+        await LoadAsync();
+    }
+
+    private async Task HandleDuplicateStripeAsync(InvestigationRow item)
+    {
+        if (item.ClientId is not Guid clientId)
+        {
+            await HandleAsync(item, dismiss: false);
+            return;
+        }
+
+        var candidates = await Wizard.GetStripeCustomerCandidates(clientId);
+        if (candidates.Count < 2)
+        {
+            // The duplicate ids live only in the item detail (nothing linked to invalidate) — close it with a note.
+            Snackbar.Add("Only one active Stripe customer is linked here — resolve it with a note instead.", Severity.Info);
+            await HandleAsync(item, dismiss: false);
+            return;
+        }
+
+        var parameters = new DialogParameters<ResolveDuplicateStripeDialog>
+        {
+            { d => d.ClientName, item.ClientName },
+            { d => d.Candidates, candidates },
+        };
+        var dialog = await Dialogs.ShowAsync<ResolveDuplicateStripeDialog>(null, parameters);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not string keep) return;
+
+        var write = await Wizard.ResolveDuplicateStripe(item.Id, keep);
+        Snackbar.Add(write.Message, write.Ok ? Severity.Success : Severity.Warning);
         await LoadAsync();
     }
 

@@ -9,6 +9,12 @@
                  Color="@(Detail.AccountType == AccountType.Master ? Color.Primary : Color.Default)">@Detail.AccountType account</MudChip>
         <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@Detail.CurrencyCode</MudChip>
         <HelpHint Text="This is the enforcement control for one client. Each required link shows the vendor facts it resolves to; verify only once you're sure these ids point at the right business's ads." />
+        <MudSpacer />
+        <MudButton Href="@($"/clients/{Detail.ClientId}")"
+                   Variant="Variant.Outlined" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.OpenInNew">
+            Client profile
+        </MudButton>
     </MudStack>
 
     @if (Detail.HasCurrentVerification)
@@ -68,6 +74,14 @@
                         {
                             <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">
                                 <code style="font-size:.72rem;">@slot.Active!.ExternalId</code> · v@slot.Active!.LinkVersion
+                                @if (!string.IsNullOrEmpty(slot.Active!.ExternalUrl))
+                                {
+                                    <MudTooltip Arrow="true" Text="@VendorLinks.Label(slot.System)">
+                                        <MudIconButton Href="@slot.Active!.ExternalUrl" Target="_blank" rel="noopener noreferrer"
+                                                       Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small"
+                                                       aria-label="@VendorLinks.Label(slot.System)" />
+                                    </MudTooltip>
+                                }
                             </MudText>
                             <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">@slot.Active!.Evidence</MudText>
                         }

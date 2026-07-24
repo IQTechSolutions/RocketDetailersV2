@@ -1,0 +1,41 @@
+@* Backfill a trial's expiry date. Returns the chosen date (DateTime, local midnight); the caller writes it. *@
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Set trial expiry</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+            A trial with no end date is a needs-investigation gap, not enforcement-exempt. Set the real expiry date —
+            it takes the client off the missing-expiry list and lets enforcement treat the trial correctly.
+        </MudText>
+        <MudDatePicker @bind-Date="_date" Label="Expiry date" Variant="Variant.Outlined"
+                       MinDate="@MinDate" Editable="true" AutoClose="true" />
+        @if (_date is null)
+        {
+            <MudText Typo="Typo.caption" Class="mud-text-secondary mt-1">Pick a date to continue.</MudText>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="@(_date is null)"
+                   OnClick="@(() => Dialog!.Close(DialogResult.Ok(_date!.Value)))">
+            Set expiry
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    /// <summary>The trial's start date — expiry can't be earlier.</summary>
+    [Parameter] public DateTime? MinDate { get; set; }
+
+    /// <summary>Pre-fill (e.g. an existing expiry being corrected).</summary>
+    [Parameter] public DateTime? Initial { get; set; }
+
+    private DateTime? _date;
+
+    protected override void OnInitialized() => _date = Initial;
+}

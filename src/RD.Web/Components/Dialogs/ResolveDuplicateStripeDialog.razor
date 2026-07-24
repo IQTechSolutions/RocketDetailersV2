@@ -1,0 +1,63 @@
+@using RD.Domain
+@* Resolve a duplicate-Stripe-customer item by choosing which customer to KEEP; the others are invalidated. Returns the chosen external id. *@
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Resolve duplicate Stripe customers@(string.IsNullOrEmpty(ClientName) ? "" : $" — {ClientName}")</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-1">
+            This client has more than one active Stripe customer — a double-billing risk. Choose the customer to <b>keep</b>;
+            the others are invalidated (their links are marked inactive, not deleted).
+        </MudText>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mb-3">
+            Not sure which is right? Open each in Stripe to compare before choosing.
+        </MudText>
+
+        <MudRadioGroup T="string" @bind-Value="_keep">
+            @foreach (var candidate in Candidates)
+            {
+                <MudPaper Outlined="true" Elevation="0" Class="pa-2 mb-2">
+                    <MudRadio T="string" Value="@candidate.ExternalId" Color="Color.Primary" Dense="true">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                            <div style="flex:1;min-width:12rem;">
+                                <MudText Typo="Typo.body2" Style="font-weight:600;">
+                                    <code style="font-size:.72rem;">@candidate.ExternalId</code>
+                                </MudText>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">@candidate.Detail</MudText>
+                            </div>
+                            <MudTooltip Arrow="true" Text="Open this customer in Stripe">
+                                <MudIconButton Href="@StripeUrl(candidate.ExternalId)" Target="_blank" rel="noopener noreferrer"
+                                               Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small"
+                                               aria-label="Open this customer in Stripe" />
+                            </MudTooltip>
+                        </MudStack>
+                    </MudRadio>
+                </MudPaper>
+            }
+        </MudRadioGroup>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="@string.IsNullOrWhiteSpace(_keep)"
+                   OnClick="@(() => Dialog!.Close(DialogResult.Ok(_keep!)))">
+            Keep this customer
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    [Parameter, EditorRequired] public IReadOnlyList<StripeCustomerCandidate> Candidates { get; set; } = [];
+    [Parameter] public string? ClientName { get; set; }
+
+    /// <summary>Injected so the dialog's per-customer "open in Stripe" links honour test-vs-live.</summary>
+    [Inject] private VendorLinks Vendor { get; set; } = default!;
+
+    private string? _keep;
+
+    private string StripeUrl(string customerId)
+        => Vendor.For(ExternalSystem.Stripe, LinkKind.Customer, customerId) ?? "";
+}
