@@ -6,6 +6,9 @@ namespace RD.Infrastructure.Gateways;
 
 public interface IStripeGateway
 {
+    /// <summary>Full paginated sweep of all customers (the discovery anchor).</summary>
+    Task<IReadOnlyList<StripeCustomerDto>> ListCustomersAsync(CancellationToken ct);
+
     /// <summary>Full paginated sweep of all subscriptions (status=all).</summary>
     Task<IReadOnlyList<StripeSubscriptionDto>> ListSubscriptionsAsync(CancellationToken ct);
 
@@ -18,6 +21,21 @@ public interface IStripeGateway
     Task<IReadOnlyList<StripeInvoiceDto>> ListInvoicesAsync(
         string? status, DateTimeOffset? createdOnOrAfter, CancellationToken ct);
 }
+
+/// <summary>
+/// A Stripe customer. NOTE: <paramref name="Name"/> is the customer/person name
+/// as entered in Stripe — NOT the business name. Cross-system reconciliation keys
+/// on business name elsewhere, so this is a person label to confirm against, not a
+/// join key.
+/// </summary>
+public sealed record StripeCustomerDto(
+    string Id,
+    string? Name,
+    string? Email,
+    string? CurrencyCode,
+    string? Country,
+    bool Delinquent,
+    DateTimeOffset Created);
 
 /// <summary>Amounts are converted from Stripe minor units to major-unit decimals.</summary>
 public sealed record StripeSubscriptionDto(
@@ -71,6 +89,25 @@ public sealed class StripeGateway : IStripeGateway
             _http.DefaultRequestHeaders.Add("Stripe-Version", o.ApiVersion);
     }
 
+    public async Task<IReadOnlyList<StripeCustomerDto>> ListCustomersAsync(CancellationToken ct)
+    {
+        var results = new List<StripeCustomerDto>();
+        string? startingAfter = null;
+        for (var page = 0; ; page++)
+        {
+            if (page >= MaxPages) throw new InvalidOperationException("Stripe customer pagination exceeded the page cap.");
+
+            var url = $"v1/customers?limit={PageSize}";
+            if (startingAfter is not null) url += $"&starting_after={Uri.EscapeDataString(startingAfter)}";
+
+            var envelope = await GetAsync<StripeListJson<CustomerJson>>(url, ct);
+            results.AddRange(envelope.Data.Where(c => c.Id.Length > 0).Select(ToDto));
+
+            if (!envelope.HasMore || envelope.Data.Count == 0) return results;
+            startingAfter = envelope.Data[^1].Id;
+        }
+    }
+
     public async Task<IReadOnlyList<StripeSubscriptionDto>> ListSubscriptionsAsync(CancellationToken ct)
     {
         var results = new List<StripeSubscriptionDto>();
@@ -121,6 +158,15 @@ public sealed class StripeGateway : IStripeGateway
         return await GatewayHttp.ReadAsAsync<T>(response, ct);
     }
 
+    private static StripeCustomerDto ToDto(CustomerJson c) => new(
+        c.Id,
+        string.IsNullOrWhiteSpace(c.Name) ? null : c.Name.Trim(),
+        string.IsNullOrWhiteSpace(c.Email) ? null : c.Email.Trim().ToLowerInvariant(),
+        string.IsNullOrWhiteSpace(c.Currency) ? null : c.Currency.ToUpperInvariant(),
+        string.IsNullOrWhiteSpace(c.Address?.Country) ? null : c.Address!.Country!.ToUpperInvariant(),
+        c.Delinquent ?? false,
+        DateTimeOffset.FromUnixTimeSeconds(c.Created));
+
     private static StripeSubscriptionDto ToDto(SubscriptionJson s)
     {
         var price = s.Items?.Data.FirstOrDefault()?.Price;
@@ -164,6 +210,22 @@ public sealed class StripeGateway : IStripeGateway
     {
         [JsonPropertyName("data")] public List<T> Data { get; set; } = [];
         [JsonPropertyName("has_more")] public bool HasMore { get; set; }
+    }
+
+    private sealed class CustomerJson
+    {
+        [JsonPropertyName("id")] public string Id { get; set; } = "";
+        [JsonPropertyName("name")] public string? Name { get; set; }
+        [JsonPropertyName("email")] public string? Email { get; set; }
+        [JsonPropertyName("currency")] public string? Currency { get; set; }
+        [JsonPropertyName("delinquent")] public bool? Delinquent { get; set; }
+        [JsonPropertyName("created")] public long Created { get; set; }
+        [JsonPropertyName("address")] public AddressJson? Address { get; set; }
+    }
+
+    private sealed class AddressJson
+    {
+        [JsonPropertyName("country")] public string? Country { get; set; }
     }
 
     private sealed class SubscriptionJson
