@@ -1,0 +1,52 @@
+/* Minimal app chrome — MudBlazor owns the design system. */
+
+html, body {
+    height: 100%;
+}
+
+code {
+    font-family: Consolas, "Cascadia Mono", Menlo, monospace;
+}
+
+.cursor-pointer {
+    cursor: pointer;
+}
+
+/* Framework error UI (template contract — keep ids/classes). */
+#blazor-error-ui {
+    color-scheme: light only;
+    background: #b32121;
+    color: #fff;
+    bottom: 0;
+    box-shadow: 0 -1px 2px rgba(0, 0, 0, 0.2);
+    box-sizing: border-box;
+    display: none;
+    left: 0;
+    padding: 0.6rem 1.25rem 0.7rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 3000;
+}
+
+    #blazor-error-ui .dismiss {
+        cursor: pointer;
+        position: absolute;
+        right: 0.75rem;
+        top: 0.5rem;
+    }
+
+    #blazor-error-ui .reload {
+        color: #fff;
+        text-decoration: underline;
+    }
+
+.blazor-error-boundary {
+    background: #b32121;
+    padding: 1rem;
+    color: white;
+    border-radius: 8px;
+}
+
+    .blazor-error-boundary::after {
+        content: "An error has occurred.";
+    }

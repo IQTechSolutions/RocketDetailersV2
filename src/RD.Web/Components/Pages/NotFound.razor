@@ -1,0 +1,14 @@
+@page "/not-found"
+@layout MainLayout
+
+<PageTitle>Not found — Rocket Detailer Control Plane</PageTitle>
+
+<MudPaper Elevation="1">
+    <EmptyState Icon="@Icons.Material.Outlined.TravelExplore"
+                Title="This page doesn't exist"
+                Hint="The link may be stale, or the feature it points to hasn't shipped yet.">
+        <MudButton Variant="Variant.Outlined" Href="/" StartIcon="@Icons.Material.Filled.SpaceDashboard">
+            Back to the cockpit
+        </MudButton>
+    </EmptyState>
+</MudPaper>

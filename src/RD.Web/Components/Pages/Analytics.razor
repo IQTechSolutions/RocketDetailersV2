@@ -1,0 +1,18 @@
+@page "/analytics"
+
+<PageTitle>Analytics — Rocket Detailer Control Plane</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+    <MudText Typo="Typo.h5">Analytics</MudText>
+    <HelpHint Text="Owner analytics and the CS funnel — planned for milestone M3, once the ledger has real history to report on." />
+</MudStack>
+
+<MudPaper Elevation="1">
+    <EmptyState Icon="@Icons.Material.Outlined.Insights"
+                Title="Analytics arrives in M3"
+                Hint="Per-client net position, funnel conversion with stage day-counts, churn cohorts and package revenue — all read-only queries over the ledger and event log. It ships once enforcement history accumulates; until then the numbers would be noise.">
+        <MudButton Variant="Variant.Outlined" Href="/" StartIcon="@Icons.Material.Filled.SpaceDashboard">
+            Back to the cockpit
+        </MudButton>
+    </EmptyState>
+</MudPaper>

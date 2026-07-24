@@ -1,0 +1,198 @@
+@page "/reconciliation"
+@using RD.Domain
+@using RD.Web.Components.Dialogs
+@inject ReconciliationService Recon
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<PageTitle>Reconciliation — Rocket Detailer Control Plane</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+    <MudText Typo="Typo.h5">Reconciliation</MudText>
+    <HelpHint Text="The work queue: everything the import or the engine couldn't resolve on its own. Fixing these unlocks enforcement client by client. Resolving here is the only thing in the app that writes to the database today." />
+</MudStack>
+
+<MudPaper Elevation="1" Class="pa-4">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3" Wrap="Wrap.Wrap" Class="mb-3">
+        <MudSelect T="InvestigationKind?" Value="_kind" ValueChanged="OnKindChanged" Clearable="true"
+                   Label="Kind" Placeholder="All kinds" Variant="Variant.Outlined" Margin="Margin.Dense"
+                   Style="min-width:18rem;"
+                   ToStringFunc="@(k => k is null ? "All kinds" : k.Value.Title())">
+            @foreach (var k in Enum.GetValues<InvestigationKind>())
+            {
+                <MudSelectItem T="InvestigationKind?" Value="@k">@k.Title()</MudSelectItem>
+            }
+        </MudSelect>
+
+        <MudToggleGroup T="string" Value="_statusView" ValueChanged="OnStatusChanged"
+                        Outlined="true" Delimiters="true" Size="Size.Small" Color="Color.Primary">
+            <MudToggleItem T="string" Value="@("Open")" Text="Open" />
+            <MudToggleItem T="string" Value="@("Resolved")" Text="Resolved" />
+        </MudToggleGroup>
+
+        <MudSpacer />
+        @if (_rows is not null)
+        {
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">@_rows.Count @(_rows.Count == 1 ? "item" : "items")</MudText>
+        }
+    </MudStack>
+
+    @if (_rows is null)
+    {
+        <GridSkeleton Rows="8" />
+    }
+    else
+    {
+        <MudDataGrid T="InvestigationRow" Items="_rows" Dense="true" Hover="true" Elevation="0">
+            <Columns>
+                <TemplateColumn Title="What's wrong">
+                    <CellTemplate>
+                        <MudTooltip Arrow="true" Text="@context.Item.Kind.WhyItMatters()">
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info">
+                                @context.Item.Kind.Title()
+                            </MudChip>
+                        </MudTooltip>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Client">
+                    <CellTemplate>
+                        @if (context.Item.ClientId is not null)
+                        {
+                            <MudLink Href="@($"/clients/{context.Item.ClientId}")" Typo="Typo.body2">
+                                @(context.Item.ClientName ?? "View client")
+                            </MudLink>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2" Class="mud-text-secondary">—</MudText>
+                        }
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Detail">
+                    <CellTemplate>
+                        <MudText Typo="Typo.body2" Style="max-width:32rem;white-space:normal;">@context.Item.Detail</MudText>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Opened">
+                    <CellTemplate>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">@context.Item.CreatedAt.ToString("yyyy-MM-dd")</MudText>
+                    </CellTemplate>
+                </TemplateColumn>
+                @if (_statusView == "Open")
+                {
+                    <TemplateColumn Title="" Sortable="false">
+                        <CellTemplate>
+                            <MudStack Row="true" Spacing="1">
+                                <MudTooltip Arrow="true" Text="Mark fixed, with a note for the audit trail.">
+                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                               OnClick="@(() => HandleAsync(context.Item, dismiss: false))">Resolve</MudButton>
+                                </MudTooltip>
+                                <MudTooltip Arrow="true" Text="Not a real problem — close it with a note saying why.">
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                                               OnClick="@(() => HandleAsync(context.Item, dismiss: true))">Dismiss</MudButton>
+                                </MudTooltip>
+                            </MudStack>
+                        </CellTemplate>
+                    </TemplateColumn>
+                }
+                else
+                {
+                    <TemplateColumn Title="Outcome" Sortable="false">
+                        <CellTemplate>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                     Color="@(context.Item.Status == InvestigationStatus.Resolved ? Color.Success : Color.Default)">
+                                @context.Item.Status
+                            </MudChip>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">
+                                @context.Item.ResolvedAt?.ToString("yyyy-MM-dd") · @context.Item.ResolvedBy
+                                @if (!string.IsNullOrEmpty(context.Item.ResolutionNote))
+                                {
+                                    <span> — @context.Item.ResolutionNote</span>
+                                }
+                            </MudText>
+                        </CellTemplate>
+                    </TemplateColumn>
+                }
+            </Columns>
+            <NoRecordsContent>
+                @if (_statusView == "Open")
+                {
+                    <EmptyState Icon="@Icons.Material.Filled.Celebration"
+                                Title="@(_kind is null ? "Nothing to investigate 🎉" : $"No open items — {_kind.Value.Title()}")"
+                                Hint="Every gap in this view has been handled. Enforcement thanks you." />
+                }
+                else
+                {
+                    <EmptyState Icon="@Icons.Material.Outlined.History"
+                                Title="Nothing resolved yet"
+                                Hint="Items you resolve or dismiss land here with their notes." />
+                }
+            </NoRecordsContent>
+            <PagerContent>
+                <MudDataGridPager T="InvestigationRow" PageSizeOptions="new[] { 25, 50, 100 }" />
+            </PagerContent>
+        </MudDataGrid>
+    }
+</MudPaper>
+
+@code {
+    [SupplyParameterFromQuery(Name = "kind")]
+    public string? KindParam { get; set; }
+
+    private List<InvestigationRow>? _rows;
+    private InvestigationKind? _kind;
+    private string _statusView = "Open";
+    private string? _loadedFor;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _kind = Enum.TryParse<InvestigationKind>(KindParam, ignoreCase: true, out var k) ? k : null;
+        var key = $"{_kind}|{_statusView}";
+        if (key == _loadedFor) return;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loadedFor = $"{_kind}|{_statusView}";
+        _rows = null;
+        _rows = await Recon.GetAsync(_kind, openOnly: _statusView == "Open");
+    }
+
+    private void OnKindChanged(InvestigationKind? kind)
+    {
+        // Kind filter lives in the URL so gap-panel links and shared URLs land on the same view.
+        Nav.NavigateTo(Nav.GetUriWithQueryParameter("kind", kind?.ToString()));
+    }
+
+    private async Task OnStatusChanged(string view)
+    {
+        _statusView = view;
+        await LoadAsync();
+    }
+
+    private async Task HandleAsync(InvestigationRow item, bool dismiss)
+    {
+        var parameters = new DialogParameters<ResolveInvestigationDialog>
+        {
+            { d => d.Item, item },
+            { d => d.Dismiss, dismiss },
+        };
+        var dialog = await Dialogs.ShowAsync<ResolveInvestigationDialog>(null, parameters);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not string note) return;
+
+        var ok = await Recon.ResolveAsync(item.Id, note, dismiss);
+        if (ok)
+        {
+            Snackbar.Add(dismiss ? "Item dismissed." : "Item resolved — one gap closer to Auto mode.", Severity.Success);
+            await LoadAsync();
+        }
+        else
+        {
+            Snackbar.Add("That item was already handled (maybe in another tab). Refreshing.", Severity.Warning);
+            await LoadAsync();
+        }
+    }
+}

@@ -1,0 +1,114 @@
+@inject OutboxActionService Actions
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+
+@* The Busy-state centerpiece: what the engine wants to do, with evidence chips and mode-aware Approve/Dismiss. *@
+<MudPaper Elevation="1" Class="pa-4">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+        <MudText Typo="Typo.h6">Action queue</MudText>
+        <HelpHint Text="What the engine wants to do. Approve or dismiss; Auto-mode clients act without you. Shadow-mode rows are observations only — the buttons stay locked." />
+    </MudStack>
+
+    @if (_rows is null)
+    {
+        <GridSkeleton Rows="4" />
+    }
+    else
+    {
+        <MudDataGrid T="ActionQueueRow" Items="_rows" Dense="true" Hover="true" Elevation="0" Bordered="false">
+            <Columns>
+                <TemplateColumn Title="Proposed action">
+                    <CellTemplate>
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudIcon Icon="@context.Item.ActionType.Icon()" Size="Size.Small" />
+                            <div>
+                                <MudText Typo="Typo.body2" Style="font-weight:600;">@context.Item.ActionType.Label()</MudText>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                    @(context.Item.Evidence ?? "No evidence line recorded for this decision.")
+                                </MudText>
+                            </div>
+                        </MudStack>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Client">
+                    <CellTemplate>
+                        <MudLink Href="@($"/clients/{context.Item.ClientId}")" Typo="Typo.body2">@context.Item.ClientName</MudLink>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Evidence">
+                    <CellTemplate>
+                        <PresenceChip Label="Stripe" Present="@context.Item.HasStripe" />
+                        <PresenceChip Label="Meta" Present="@context.Item.HasMeta" />
+                        <PresenceChip Label="GHL" Present="@context.Item.HasGhl" />
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Mode">
+                    <CellTemplate>
+                        <ModeBadge Mode="@context.Item.Mode" />
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="" Sortable="false">
+                    <CellTemplate>
+                        @{ var isShadow = context.Item.Mode == RD.Domain.EnforcementMode.Shadow; }
+                        <MudStack Row="true" Spacing="1">
+                            <MudTooltip Arrow="true" Text="@(isShadow ? "Shadow mode — engine observes only" : "Queue this action for execution")">
+                                <span>
+                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                               Disabled="@isShadow"
+                                               OnClick="@(() => ConfirmAsync(context.Item, approve: true))">
+                                        Approve
+                                    </MudButton>
+                                </span>
+                            </MudTooltip>
+                            <MudTooltip Arrow="true" Text="@(isShadow ? "Shadow mode — engine observes only" : "Reject this proposal")">
+                                <span>
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                                               Disabled="@isShadow"
+                                               OnClick="@(() => ConfirmAsync(context.Item, approve: false))">
+                                        Dismiss
+                                    </MudButton>
+                                </span>
+                            </MudTooltip>
+                        </MudStack>
+                    </CellTemplate>
+                </TemplateColumn>
+            </Columns>
+            <NoRecordsContent>
+                <EmptyState Icon="@Icons.Material.Filled.CheckCircle"
+                            Title="All quiet — every client paid ✓"
+                            Hint="No proposed actions waiting. The engine keeps watching with every sync." />
+            </NoRecordsContent>
+        </MudDataGrid>
+    }
+</MudPaper>
+
+@code {
+    private List<ActionQueueRow>? _rows;
+
+    protected override async Task OnInitializedAsync()
+        => _rows = await Actions.GetOpenQueueAsync();
+
+    private async Task ConfirmAsync(ActionQueueRow row, bool approve)
+    {
+        var verb = approve ? "Approve" : "Dismiss";
+        var confirmed = await Dialogs.ShowMessageBoxAsync(
+            $"{verb} — {row.ActionType.Label()}",
+            $"{verb} \"{row.ActionType.Label()}\" for {row.ClientName}? "
+            + (approve
+                ? "The action will execute through the outbox with full audit."
+                : "The proposal will be recorded as dismissed."),
+            yesText: verb, cancelText: "Cancel");
+        if (confirmed != true) return;
+
+        try
+        {
+            if (approve) await Actions.ApproveAsync(row.Id);
+            else await Actions.DismissAsync(row.Id, null);
+        }
+        catch (NotImplementedException)
+        {
+            // The outbox executor is Lane D (M2) — the cockpit stays honest about it.
+            Snackbar.Add("Not wired yet — approve/dismiss executes through the outbox dispatcher, which ships with Assist mode (M2).", Severity.Info);
+        }
+    }
+}

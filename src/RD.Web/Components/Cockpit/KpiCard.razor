@@ -1,0 +1,27 @@
+@* One KPI tile: label, big value, plain-English hint, help tooltip (Req 16). *@
+<MudPaper Class="pa-4 d-flex flex-column" Elevation="1" Style="height:100%;">
+    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+        <MudText Typo="Typo.overline" Class="mud-text-secondary" Style="line-height:1.2;">@Label</MudText>
+        <HelpHint Text="@Help" />
+    </MudStack>
+    <MudText Typo="@(Lead ? Typo.h3 : Typo.h4)" Color="@ValueColor" Style="font-weight:700;">@Value</MudText>
+    @if (!string.IsNullOrEmpty(Hint))
+    {
+        <MudText Typo="Typo.caption" Class="mud-text-secondary mt-1">@Hint</MudText>
+    }
+    @if (ChildContent is not null)
+    {
+        <div class="mt-2">@ChildContent</div>
+    }
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter, EditorRequired] public string Value { get; set; } = "";
+    [Parameter] public string? Hint { get; set; }
+    [Parameter, EditorRequired] public string Help { get; set; } = "";
+    /// <summary>The leading KPI renders bigger (Net exposure leads the row).</summary>
+    [Parameter] public bool Lead { get; set; }
+    [Parameter] public Color ValueColor { get; set; } = Color.Default;
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

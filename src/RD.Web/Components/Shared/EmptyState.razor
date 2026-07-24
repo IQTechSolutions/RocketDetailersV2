@@ -1,0 +1,20 @@
+@* Designed empty state — no blank tables anywhere (F6 philosophy). *@
+<div class="d-flex flex-column align-center justify-center pa-8" style="text-align:center;">
+    <MudIcon Icon="@Icon" Style="font-size:2.75rem;opacity:.45;" />
+    <MudText Typo="Typo.subtitle1" Class="mt-2">@Title</MudText>
+    @if (!string.IsNullOrEmpty(Hint))
+    {
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1" Style="max-width:36rem;">@Hint</MudText>
+    }
+    @if (ChildContent is not null)
+    {
+        <div class="mt-3">@ChildContent</div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Icon { get; set; } = Icons.Material.Outlined.Inbox;
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Hint { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

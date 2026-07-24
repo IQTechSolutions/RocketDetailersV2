@@ -1,0 +1,50 @@
+@* KPI row per the approved wireframe: Net exposure leads, then clients at risk, campaigns live, failed payments today. *@
+<MudGrid Spacing="3">
+    <MudItem xs="12" sm="6" md="3">
+        <KpiCard Label="Net exposure (unbilled ad spend)"
+                 Value="@Human.MoneyKpi(Snapshot.UsdExposure, "USD")"
+                 Hint="Ad spend we paid Meta that clients haven't paid us for. Goal: $0."
+                 Help="Per master-account client: everything we've spent on their ads minus everything they've successfully paid us, never below zero, summed. USD only — other currencies get their own chip below."
+                 Lead="true"
+                 ValueColor="@(Snapshot.UsdExposure > 0 ? Color.Warning : Color.Success)">
+            @if (Snapshot.NonUsdExposure.Any())
+            {
+                <MudStack Row="true" Wrap="Wrap.Wrap" Spacing="1">
+                    @foreach (var e in Snapshot.NonUsdExposure)
+                    {
+                        <MudTooltip Arrow="true" Text="@($"{e.ClientCount} {(e.ClientCount == 1 ? "client has" : "clients have")} unbilled spend in {e.CurrencyCode}. No FX conversion — kept out of the USD number.")">
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                     Color="@(e.Amount > 0 ? Color.Warning : Color.Default)">
+                                @Human.MoneyKpi(e.Amount, e.CurrencyCode)
+                            </MudChip>
+                        </MudTooltip>
+                    }
+                </MudStack>
+            }
+        </KpiCard>
+    </MudItem>
+    <MudItem xs="12" sm="6" md="3">
+        <KpiCard Label="Clients at risk"
+                 Value="@Snapshot.ClientsAtRisk.ToString()"
+                 Hint="Failed payment, ads may still be running"
+                 Help="Master-account clients whose most recent billing event is a failed charge. These are the clients the enforcement wedge exists for."
+                 ValueColor="@(Snapshot.ClientsAtRisk > 0 ? Color.Error : Color.Success)" />
+    </MudItem>
+    <MudItem xs="12" sm="6" md="3">
+        <KpiCard Label="Campaigns live"
+                 Value="@($"{Snapshot.CampaignsLive} / {Snapshot.MasterClientCount}")"
+                 Hint="Master account clients"
+                 Help="Master-account clients with at least one Meta campaign currently delivering, out of all master-account clients. Comes from the last Meta sync." />
+    </MudItem>
+    <MudItem xs="12" sm="6" md="3">
+        <KpiCard Label="Failed payments today"
+                 Value="@Snapshot.FailedPaymentsToday.ToString()"
+                 Hint="@(Snapshot.FailedPaymentsToday > 0 ? "Dunning steps appear in the queue" : "No failed charges so far today")"
+                 Help="Failed charges recorded in the ledger today (UTC). Each one starts a 2-working-day dunning window before any pause is proposed."
+                 ValueColor="@(Snapshot.FailedPaymentsToday > 0 ? Color.Error : Color.Default)" />
+    </MudItem>
+</MudGrid>
+
+@code {
+    [Parameter, EditorRequired] public CockpitSnapshot Snapshot { get; set; } = default!;
+}

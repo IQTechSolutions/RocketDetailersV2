@@ -1,0 +1,12 @@
+@* Loading skeleton for any grid/panel — shown before first data arrives. *@
+<div class="pa-2">
+    <MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="36px" Class="mb-2" />
+    @for (var i = 0; i < Rows; i++)
+    {
+        <MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="28px" Class="mb-2" Style="@($"opacity:{1.0 - i * 0.09:F2}")" />
+    }
+</div>
+
+@code {
+    [Parameter] public int Rows { get; set; } = 6;
+}

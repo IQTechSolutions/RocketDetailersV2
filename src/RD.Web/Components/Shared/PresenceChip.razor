@@ -1,0 +1,13 @@
+@* Link-health evidence chip: "Stripe ✓" / "Meta ✗". *@
+<MudTooltip Arrow="true" Placement="Placement.Top"
+            Text="@(Present ? $"{Label} identity linked and active." : $"No active {Label} link — fix it in Reconciliation.")">
+    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+             Color="@(Present ? Color.Success : Color.Error)" Class="mr-1 mb-1">
+        @Label @(Present ? "✓" : "✗")
+    </MudChip>
+</MudTooltip>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter] public bool Present { get; set; }
+}
