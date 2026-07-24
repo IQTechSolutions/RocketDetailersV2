@@ -30,6 +30,14 @@ public interface IGhlGateway
     /// <summary>Add the contact to a workflow (fires the dunning message). TestMode redirects to the test contact.</summary>
     Task<GhlWriteResult> TriggerWorkflowAsync(
         string locationId, string contactId, string workflowId, CancellationToken ct);
+
+    /// <summary>
+    /// Creates a contact in one location (email + name), returning its id. GHL
+    /// dedupes on email, so an existing contact is returned rather than duplicated.
+    /// A WRITE — admin-initiated only (not TestMode-gated; it creates a CRM record,
+    /// it does not message anyone).
+    /// </summary>
+    Task<string> CreateContactAsync(string locationId, string token, string? email, string name, CancellationToken ct);
 }
 
 /// <summary>Records where the write ACTUALLY landed — under TestMode that is the test contact, not the intended recipient. The audit must show the redirect.</summary>
@@ -185,6 +193,32 @@ public sealed class GhlGateway : IGhlGateway
             if (ParseMessage(element) is { } message) results.Add(message);
         }
         return results;
+    }
+
+    public async Task<string> CreateContactAsync(string locationId, string token, string? email, string name, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(locationId)) throw new ArgumentException("A GHL location id is required to create a contact.", nameof(locationId));
+
+        var payload = JsonSerializer.Serialize(new { locationId, email, name });
+        using var request = BuildJsonRequest(HttpMethod.Post, "contacts/", token, payload);
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+
+        // Read the body regardless of status: a "duplicated contact" (409/400) still
+        // carries the existing contact's id in meta.contactId, which is what we want.
+        var body = await response.Content.ReadAsStringAsync(ct);
+        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
+        var root = doc.RootElement;
+
+        if (root.TryGetProperty("contact", out var contact)
+            && contact.TryGetProperty("id", out var idEl) && idEl.GetString() is { Length: > 0 } id)
+            return id;
+
+        if (root.TryGetProperty("meta", out var meta)
+            && meta.TryGetProperty("contactId", out var dupEl) && dupEl.GetString() is { Length: > 0 } dupId)
+            return dupId; // GHL says it already exists (deduped on email) — link that one
+
+        var snippet = body.Length > 200 ? body[..200] : body;
+        throw new HttpRequestException($"GHL create-contact returned {(int)response.StatusCode} with no contact id: {snippet}");
     }
 
     public async Task<IReadOnlyList<GhlContactDto>> SearchContactsAsync(string? locationId, string token, string query, CancellationToken ct)

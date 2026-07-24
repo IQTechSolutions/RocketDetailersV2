@@ -1,0 +1,55 @@
+@* Create a GHL contact for a client that has none. Returns the chosen locationId (string); the caller does the create+link. *@
+@using RD.Web.Services
+@inject GhlContactAdminService GhlAdmin
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Create GHL contact</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+            Creates a GoHighLevel contact for this client — the comms channel every client needs — and links it.
+            GHL dedupes on email, so an existing contact is linked rather than duplicated.
+        </MudText>
+        <MudText Typo="Typo.body2"><b>Client:</b> @(string.IsNullOrWhiteSpace(Name) ? "—" : Name)</MudText>
+        <MudText Typo="Typo.body2" Class="mb-3"><b>Email:</b> @(string.IsNullOrWhiteSpace(Email) ? "—" : Email)</MudText>
+
+        <MudSelect T="string" @bind-Value="_locationId" Label="GHL location" Variant="Variant.Outlined"
+                   Placeholder="Choose the location to create it in">
+            @foreach (var loc in _locations)
+            {
+                <MudSelectItem T="string" Value="@loc.LocationId">@loc.Label</MudSelectItem>
+            }
+        </MudSelect>
+        @if (_locations.Count == 0)
+        {
+            <MudText Typo="Typo.caption" Color="Color.Warning" Class="mt-1">
+                No GHL locations configured — set Ghl:Locations in the app's secrets and restart.
+            </MudText>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="@(string.IsNullOrEmpty(_locationId))"
+                   OnClick="@(() => Dialog!.Close(DialogResult.Ok(_locationId!)))">
+            Create contact
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    [Parameter] public string? Email { get; set; }
+    [Parameter] public string? Name { get; set; }
+
+    private IReadOnlyList<(string LocationId, string Label)> _locations = [];
+    private string? _locationId;
+
+    protected override void OnInitialized()
+    {
+        _locations = GhlAdmin.Locations();
+        if (_locations.Count == 1) _locationId = _locations[0].LocationId; // one location → preselect
+    }
+}
