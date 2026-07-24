@@ -36,6 +36,8 @@ public sealed record CockpitData
     public int CampaignsLiveMasterClients { get; init; }
     /// <summary>OutboxActions in Pending or AwaitingApproval.</summary>
     public int OpenActionCount { get; init; }
+    /// <summary>Clients whose LATEST decision proposes an enforcement action (Pause/Resume/DunningStep/Escalate) with no outbox row — in Shadow, the decisions ARE the queue.</summary>
+    public int ShadowVerdictCount { get; init; }
     public IReadOnlyList<LedgerFact> MasterClientLedger { get; init; } = [];
     public IReadOnlyList<CompletedSyncFact> CompletedSyncRuns { get; init; } = [];
     public IReadOnlyList<MappingGap> OpenInvestigations { get; init; } = [];
@@ -54,6 +56,9 @@ public sealed record CockpitSnapshot
     public required int MasterClientCount { get; init; }
     public required int FailedPaymentsToday { get; init; }
     public required int OpenActionCount { get; init; }
+    public int ShadowVerdictCount { get; init; }
+    /// <summary>Everything the queue shows: staged outbox actions + shadow would-X verdicts.</summary>
+    public int QueueCount => OpenActionCount + ShadowVerdictCount;
     public required IReadOnlyList<MappingGap> MappingGaps { get; init; }
     public required IReadOnlyList<SystemFreshness> SyncFreshness { get; init; }
     public required int ClientsLinked { get; init; }

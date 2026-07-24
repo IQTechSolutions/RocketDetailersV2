@@ -37,7 +37,7 @@ else
 
     <MudGrid Spacing="3" Class="mt-0">
         <MudItem xs="12" md="8">
-            @if (_snapshot.OpenActionCount == 0)
+            @if (_snapshot.QueueCount == 0)
             {
                 <CockpitAllQuiet />
             }

@@ -37,6 +37,19 @@ public class CockpitStateService(IDbContextFactory<RdDbContext> factory, IClock 
         var openActions = await db.OutboxActions
             .CountAsync(a => a.Status == OutboxStatus.Pending || a.Status == OutboxStatus.AwaitingApproval, ct);
 
+        // Shadow phase: the latest would-X verdicts are the queue. (M2's
+        // dispatcher stages Assist/Auto verdicts as OutboxActions; shadow
+        // clients keep appearing here, exactly like the approved wireframe.)
+        // NOTE: composing Where/Count AFTER GroupBy+First() trips an EF
+        // translation bug (EmptyProjectionMember) — materialize, then filter.
+        var latestVerdicts = await db.Decisions
+            .GroupBy(d => d.ClientId)
+            .Select(g => g.OrderByDescending(d => d.EvaluatedAt).First())
+            .ToListAsync(ct);
+        var shadowVerdicts = latestVerdicts.Count(d => d.ProposedAction
+            is ProposedActionType.Pause or ProposedActionType.Resume
+            or ProposedActionType.DunningStep or ProposedActionType.Escalate);
+
         // Master-client ledger facts, rolled up in memory by CockpitRules (v1: hundreds of clients, fine).
         var ledger = await db.LedgerEntries
             .Join(db.Clients.Where(c => c.AccountType == AccountType.Master),
@@ -63,6 +76,7 @@ public class CockpitStateService(IDbContextFactory<RdDbContext> factory, IClock 
             ClientsWithActiveStripeSubscription = clientsLinked,
             CampaignsLiveMasterClients = campaignsLive,
             OpenActionCount = openActions,
+            ShadowVerdictCount = shadowVerdicts,
             MasterClientLedger = ledger,
             CompletedSyncRuns = syncs,
             OpenInvestigations = gaps,

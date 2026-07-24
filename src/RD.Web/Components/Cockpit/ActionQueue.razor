@@ -22,7 +22,7 @@
                         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
                             <MudIcon Icon="@context.Item.ActionType.Icon()" Size="Size.Small" />
                             <div>
-                                <MudText Typo="Typo.body2" Style="font-weight:600;">@context.Item.ActionType.Label()</MudText>
+                                <MudText Typo="Typo.body2" Style="font-weight:600;">@(context.Item.TitleOverride ?? context.Item.ActionType.Label())</MudText>
                                 <MudText Typo="Typo.caption" Class="mud-text-secondary">
                                     @(context.Item.Evidence ?? "No evidence line recorded for this decision.")
                                 </MudText>

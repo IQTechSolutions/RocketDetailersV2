@@ -77,7 +77,7 @@ public static class CockpitRules
         var state =
             data.CompletedSyncRuns.Count == 0 ? CockpitState.FirstRun
             : freshness.Any(f => f.IsStale) ? CockpitState.Stale
-            : data.OpenActionCount == 0 ? CockpitState.AllQuiet
+            : data.OpenActionCount + data.ShadowVerdictCount == 0 ? CockpitState.AllQuiet
             : CockpitState.Busy;
 
         return new CockpitSnapshot
@@ -90,6 +90,7 @@ public static class CockpitRules
             MasterClientCount = data.MasterClientCount,
             FailedPaymentsToday = failedToday,
             OpenActionCount = data.OpenActionCount,
+            ShadowVerdictCount = data.ShadowVerdictCount,
             MappingGaps = data.OpenInvestigations.OrderByDescending(g => g.Count).ToList(),
             SyncFreshness = freshness,
             ClientsLinked = data.ClientsWithActiveStripeSubscription,
