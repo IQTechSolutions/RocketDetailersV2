@@ -82,6 +82,17 @@ builder.Services.AddHangfireServer();
 
 var app = builder.Build();
 
+// Create the database (if absent) and bring the schema current before anything
+// touches it — Hangfire connects on startup, so a fresh/unmigrated database
+// would otherwise fail with SQL 4060. Single-tenant, self-hosted, single
+// instance: auto-migrate on boot is the pragmatic choice (no migration race).
+using (var migrationScope = app.Services.CreateScope())
+{
+    var factory = migrationScope.ServiceProvider.GetRequiredService<IDbContextFactory<RdDbContext>>();
+    await using var db = await factory.CreateDbContextAsync();
+    await db.Database.MigrateAsync();
+}
+
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
 {
