@@ -21,6 +21,10 @@ if (args.Length > 0 && args[0].Equals("discover", StringComparison.OrdinalIgnore
 if (args.Length > 0 && args[0].Equals("link-meta", StringComparison.OrdinalIgnoreCase))
     return await MetaLinkRunner.RunAsync(args);
 
+// "link-ghl" verb: link GHL contacts to clients from the sheet crosswalk (no GHL API — see GhlLinkRunner).
+if (args.Length > 0 && args[0].Equals("link-ghl", StringComparison.OrdinalIgnoreCase))
+    return await GhlLinkRunner.RunAsync(args);
+
 // Seed importer: one-time load of the reconciliation spreadsheet into SQL.
 // Disposable by design (design doc: "one-time spreadsheet import code").
 // Usage: dotnet run --project src/RD.Tools.Import -- "<xlsx path>" [--conn "<connection string>"] [--force]
