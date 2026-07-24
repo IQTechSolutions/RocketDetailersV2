@@ -1,0 +1,18 @@
+@* One rung of the enforcement ladder with its live client count. *@
+<MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudIcon Icon="@Icon" Size="Size.Large" Color="Color.Primary" />
+        <div>
+            <MudText Typo="Typo.h4" Style="font-weight:700;">@Count</MudText>
+            <MudText Typo="Typo.subtitle2">@Title</MudText>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">@Hint</MudText>
+        </div>
+    </MudStack>
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public int Count { get; set; }
+    [Parameter] public string Hint { get; set; } = "";
+    [Parameter] public string Icon { get; set; } = MudBlazor.Icons.Material.Filled.Circle;
+}
