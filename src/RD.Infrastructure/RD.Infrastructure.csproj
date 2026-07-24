@@ -14,6 +14,9 @@
   <ItemGroup>
     <PackageReference Include="Hangfire.Core" Version="1.8.24" />
     <PackageReference Include="Hangfire.SqlServer" Version="1.8.24" />
+    <!-- Transitive-vulnerability pin: Hangfire.Core 1.8.24 pulls Newtonsoft.Json 11.0.1
+         (NU1903 / GHSA-5crp-9r3c-p9vr). Remove when Hangfire updates its dependency. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.10" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
