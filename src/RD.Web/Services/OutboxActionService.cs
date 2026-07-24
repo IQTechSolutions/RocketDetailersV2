@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using RD.Domain;
 using RD.Infrastructure;
+using RD.Infrastructure.Enforcement;
 
 namespace RD.Web.Services;
 
@@ -21,11 +22,12 @@ public sealed record ActionQueueRow(
     string? TitleOverride = null);
 
 /// <summary>
-/// Read side of the outbox for the cockpit. Approve/Dismiss are deliberate
-/// stubs — the outbox executor (leasing, CAS on ActionVersion, revalidation)
-/// is Lane D / M2 scope and replaces these bodies.
+/// Read side of the outbox for the cockpit, plus Approve/Dismiss delegating to
+/// the CAS-guarded <see cref="ApprovalService"/>. The dispatcher revalidates
+/// before any external write, so approving here stages intent, never a live
+/// action against stale state.
 /// </summary>
-public class OutboxActionService(IDbContextFactory<RdDbContext> factory)
+public class OutboxActionService(IDbContextFactory<RdDbContext> factory, ApprovalService approvals)
 {
     public async Task<List<ActionQueueRow>> GetOpenQueueAsync(CancellationToken ct = default)
     {
@@ -111,11 +113,11 @@ public class OutboxActionService(IDbContextFactory<RdDbContext> factory)
             .ToList();
     }
 
-    /// <summary>Lane D: CAS on ActionVersion, status → Approved, ApprovalChannel = Cockpit, then the dispatcher leases it.</summary>
-    public Task ApproveAsync(Guid actionId)
-        => throw new NotImplementedException("Approve executes through the outbox dispatcher — that's Lane D (M2). The cockpit only stages the intent for now.");
+    /// <summary>Cockpit Approve → CAS to Approved; the dispatcher revalidates then executes. Returns the outcome so the UI can report "already resolved" honestly.</summary>
+    public Task<ApprovalOutcome> ApproveAsync(Guid actionId)
+        => approvals.ApproveAsync(actionId, ApprovalChannel.Cockpit, "operator");
 
-    /// <summary>Lane D: CAS on ActionVersion, status → Dismissed with DismissReason.</summary>
-    public Task DismissAsync(Guid actionId, string? reason)
-        => throw new NotImplementedException("Dismiss executes through the outbox dispatcher — that's Lane D (M2). The cockpit only stages the intent for now.");
+    /// <summary>Cockpit Dismiss → CAS to Dismissed.</summary>
+    public Task<ApprovalOutcome> DismissAsync(Guid actionId, string? reason)
+        => approvals.DismissAsync(actionId, ApprovalChannel.Cockpit, "operator", reason);
 }

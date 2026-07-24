@@ -35,7 +35,8 @@ public sealed class MetaSyncJobTests : IDisposable
             AccountCurrency = "USD",
         });
         var gateway = new MetaAdsGateway(
-            new HttpClient(), options, new RetryHelper { BaseDelay = TimeSpan.FromMilliseconds(1) });
+            new HttpClient(), options, Options.Create(new SafetyOptions()),
+            new RetryHelper { BaseDelay = TimeSpan.FromMilliseconds(1) });
         return new MetaSyncJob(_db.Factory, gateway, options, _clock, NullLogger<MetaSyncJob>.Instance);
     }
 

@@ -100,15 +100,25 @@
             yesText: verb, cancelText: "Cancel");
         if (confirmed != true) return;
 
-        try
+        var outcome = approve
+            ? await Actions.ApproveAsync(row.Id)
+            : await Actions.DismissAsync(row.Id, null);
+
+        switch (outcome)
         {
-            if (approve) await Actions.ApproveAsync(row.Id);
-            else await Actions.DismissAsync(row.Id, null);
+            case RD.Infrastructure.Enforcement.ApprovalOutcome.Approved:
+                Snackbar.Add($"Approved. The dispatcher will revalidate and execute \"{row.ActionType.Label()}\" for {row.ClientName}.", Severity.Success);
+                break;
+            case RD.Infrastructure.Enforcement.ApprovalOutcome.Dismissed:
+                Snackbar.Add("Dismissed. The proposal is recorded as rejected.", Severity.Normal);
+                break;
+            case RD.Infrastructure.Enforcement.ApprovalOutcome.AlreadyResolved:
+                Snackbar.Add("Already resolved — another channel or click handled this action first.", Severity.Info);
+                break;
+            case RD.Infrastructure.Enforcement.ApprovalOutcome.NotFound:
+                Snackbar.Add("This action no longer exists.", Severity.Warning);
+                break;
         }
-        catch (NotImplementedException)
-        {
-            // The outbox executor is Lane D (M2) — the cockpit stays honest about it.
-            Snackbar.Add("Not wired yet — approve/dismiss executes through the outbox dispatcher, which ships with Assist mode (M2).", Severity.Info);
-        }
+        _rows = await Actions.GetOpenQueueAsync();
     }
 }
