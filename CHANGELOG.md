@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 Format: `## [MAJOR.MINOR.PATCH.MICRO] - YYYY-MM-DD` with Added / Changed / Fixed / Removed sections.
 
+## [0.0.0.3] - 2026-07-24
+
+### Added
+
+- Builds are now stamped with the release version: every assembly's product, file, and assembly version comes from the repo-root VERSION file, so a deployed binary can always be traced back to the exact release that produced it.
+- Version safety guard: the build fails with a clear error if the VERSION file is missing (e.g. an incomplete checkout or container copy) or doesn't match the MAJOR.MINOR.PATCH.MICRO format, instead of silently shipping a wrong version.
+
 ## [0.0.0.2] - 2026-07-24
 
 ### Fixed

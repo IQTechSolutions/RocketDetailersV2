@@ -1,0 +1,3 @@
+# VERSION is read by MSBuild property functions; pin line endings so the
+# on-disk bytes don't depend on each contributor's core.autocrlf.
+VERSION text eol=lf

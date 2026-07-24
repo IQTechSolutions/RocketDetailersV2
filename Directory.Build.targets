@@ -1,0 +1,12 @@
+<Project>
+  <!-- Loud failure when the repo-root VERSION file is missing or malformed.
+       Evaluation-time property functions (Directory.Build.props) cannot emit
+       diagnostics, so the guard lives here. Restore is deliberately excluded:
+       Docker restore-layer caching copies only csproj/props files. -->
+  <Target Name="RdValidateVersion" BeforeTargets="BeforeBuild;Pack;Publish">
+    <Error Condition="!Exists('$(RdVersionFile)')"
+           Text="VERSION file not found at $(RdVersionFile). The repo-root VERSION file is the single source of truth for assembly versions — did the checkout/COPY omit it?" />
+    <Error Condition="Exists('$(RdVersionFile)') And '$(RdVersionValid)' != 'true'"
+           Text="VERSION file at $(RdVersionFile) has invalid content '$(RdVersion)' — expected MAJOR.MINOR.PATCH.MICRO (e.g. 0.0.0.1)." />
+  </Target>
+</Project>
