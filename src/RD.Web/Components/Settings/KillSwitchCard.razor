@@ -1,0 +1,52 @@
+@inject RD.Infrastructure.Enforcement.KillSwitchService KillSwitch
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+
+@* The global stop. Engaging reverts every client to Shadow and supersedes all
+   in-flight actions via an epoch bump. Deliberately blunt and obvious. *@
+<MudPaper Elevation="1" Class="pa-4">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+        <MudIcon Icon="@Icons.Material.Filled.PowerSettingsNew" Color="@(_engaged ? Color.Error : Color.Default)" />
+        <MudText Typo="Typo.h6">Global kill switch</MudText>
+        <HelpHint Text="The emergency stop. Engaging it immediately reverts every client to Shadow mode and cancels all pending enforcement actions. Nothing pauses or resumes ads while it is on. Use it the moment anything looks wrong." />
+    </MudStack>
+
+    @if (_engaged)
+    {
+        <MudAlert Severity="Severity.Error" Class="mb-3" Icon="@Icons.Material.Filled.Warning">
+            Enforcement is STOPPED. Every client is in Shadow mode — the engine observes but takes no action.
+        </MudAlert>
+        <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.PlayArrow"
+                   OnClick="@(() => ToggleAsync(engage: false))">Release the kill switch</MudButton>
+    }
+    else
+    {
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+            Enforcement is live for any client in Assist or Auto mode. Engage this to halt everything at once.
+        </MudText>
+        <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Stop"
+                   OnClick="@(() => ToggleAsync(engage: true))">Engage the kill switch</MudButton>
+    }
+</MudPaper>
+
+@code {
+    private bool _engaged;
+
+    protected override async Task OnInitializedAsync() => _engaged = await KillSwitch.IsEngagedAsync();
+
+    private async Task ToggleAsync(bool engage)
+    {
+        var verb = engage ? "Engage" : "Release";
+        var body = engage
+            ? "This stops ALL enforcement and reverts every client to Shadow mode. In-flight actions are cancelled. Continue?"
+            : "Enforcement resumes for clients in Assist/Auto mode. Clients you want enforced must be re-promoted from Shadow. Continue?";
+        var ok = await Dialogs.ShowMessageBoxAsync($"{verb} kill switch", body, yesText: verb, cancelText: "Cancel");
+        if (ok != true) return;
+
+        if (engage) await KillSwitch.EngageAsync("operator", "Engaged from Settings.");
+        else await KillSwitch.ReleaseAsync("operator", "Released from Settings.");
+
+        _engaged = engage;
+        Snackbar.Add(engage ? "Kill switch ENGAGED — all enforcement stopped." : "Kill switch released.", engage ? Severity.Error : Severity.Success);
+    }
+}

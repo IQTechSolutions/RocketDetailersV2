@@ -45,3 +45,26 @@ public sealed class GhlOptions
     /// <summary>How many most-recent conversations each sweep visits per location.</summary>
     public int ConversationSweepLimit { get; set; } = 100;
 }
+
+/// <summary>
+/// The staging safety profile (design doc F5 + outside-voice continuity).
+/// SAFE BY DEFAULT: with no config, the app cannot touch a real client's ads
+/// or phone — GHL sends redirect to a test contact, and Meta writes are
+/// refused unless the target is the dedicated canary campaign. Production
+/// enforcement is a deliberate ops flip AFTER the M0 human gates are met, not
+/// an accident of a missing setting.
+/// </summary>
+public sealed class SafetyOptions
+{
+    public const string SectionName = "Safety";
+
+    /// <summary>When true (default), ALL GHL sends are redirected to the test contact regardless of the intended recipient.</summary>
+    public bool GhlTestMode { get; set; } = true;
+    public string TestContactLocationId { get; set; } = "";
+    public string TestContactId { get; set; } = "";
+
+    /// <summary>When false (default), Meta pause/resume is permitted ONLY against <see cref="CanaryCampaignId"/>; any other target throws.</summary>
+    public bool AllowProductionMetaWrites { get; set; } = false;
+    /// <summary>The dedicated paused canary campaign (owner creates it; the old "$1/day" id turned out to be a real client's ads).</summary>
+    public string CanaryCampaignId { get; set; } = "";
+}

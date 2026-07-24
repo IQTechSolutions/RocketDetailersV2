@@ -4,6 +4,13 @@
     <ProjectReference Include="..\RD.Domain\RD.Domain.csproj" />
   </ItemGroup>
 
+  <!-- IEndpointRouteBuilder / HttpContext / Results for WebhookEndpoints.MapStripeWebhook.
+       Shared-framework reference (NOT a NuGet package); resolved from the ASP.NET runtime
+       the host already ships. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Hangfire.Core" Version="1.8.24" />
     <PackageReference Include="Hangfire.SqlServer" Version="1.8.24" />
@@ -23,6 +30,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- The Microsoft.AspNetCore.App shared framework (added for the webhook endpoint)
+         overlaps the Extensions.* packages M1 pins explicitly; keep the pins, mute the hint. -->
+    <NoWarn>$(NoWarn);NU1510</NoWarn>
   </PropertyGroup>
 
 </Project>

@@ -15,7 +15,18 @@ public interface IGhlGateway
     /// <summary>Messages for one conversation. Sync cares about outbound only (delivery evidence).</summary>
     Task<IReadOnlyList<GhlMessageDto>> GetMessagesAsync(
         string locationId, string conversationId, CancellationToken ct);
+
+    /// <summary>Write a contact custom field (e.g. the hosted invoice URL a dunning workflow renders). TestMode redirects to the test contact.</summary>
+    Task<GhlWriteResult> SetContactFieldAsync(
+        string locationId, string contactId, string fieldKey, string value, CancellationToken ct);
+
+    /// <summary>Add the contact to a workflow (fires the dunning message). TestMode redirects to the test contact.</summary>
+    Task<GhlWriteResult> TriggerWorkflowAsync(
+        string locationId, string contactId, string workflowId, CancellationToken ct);
 }
+
+/// <summary>Records where the write ACTUALLY landed — under TestMode that is the test contact, not the intended recipient. The audit must show the redirect.</summary>
+public sealed record GhlWriteResult(bool Redirected, string EffectiveLocationId, string EffectiveContactId);
 
 public sealed record GhlConversationDto(string Id, string? ContactId);
 
@@ -42,15 +53,84 @@ public sealed class GhlGateway : IGhlGateway
 
     private readonly HttpClient _http;
     private readonly GhlOptions _options;
+    private readonly SafetyOptions _safety;
     private readonly RetryHelper _retry;
 
-    public GhlGateway(HttpClient http, IOptions<GhlOptions> options, RetryHelper retry)
+    public GhlGateway(HttpClient http, IOptions<GhlOptions> options, IOptions<SafetyOptions> safety, RetryHelper retry)
     {
         _http = http;
         _options = options.Value;
+        _safety = safety.Value;
         _retry = retry;
         _http.BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/') + "/");
         _http.DefaultRequestHeaders.Add("Version", ApiVersion);
+    }
+
+    public async Task<GhlWriteResult> SetContactFieldAsync(
+        string locationId, string contactId, string fieldKey, string value, CancellationToken ct)
+    {
+        var (effLocation, effContact, redirected) = ResolveTarget(locationId, contactId);
+        var token = TokenFor(effLocation);
+        var payload = JsonSerializer.Serialize(new
+        {
+            customFields = new[] { new { key = fieldKey, field_value = value } },
+        });
+
+        using var request = BuildJsonRequest(HttpMethod.Put, $"contacts/{Uri.EscapeDataString(effContact)}", token, payload);
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureWriteSucceededAsync(response, ct);
+        return new GhlWriteResult(redirected, effLocation, effContact);
+    }
+
+    public async Task<GhlWriteResult> TriggerWorkflowAsync(
+        string locationId, string contactId, string workflowId, CancellationToken ct)
+    {
+        var (effLocation, effContact, redirected) = ResolveTarget(locationId, contactId);
+        var token = TokenFor(effLocation);
+
+        using var request = BuildJsonRequest(
+            HttpMethod.Post,
+            $"contacts/{Uri.EscapeDataString(effContact)}/workflow/{Uri.EscapeDataString(workflowId)}",
+            token, "{}");
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureWriteSucceededAsync(response, ct);
+        return new GhlWriteResult(redirected, effLocation, effContact);
+    }
+
+    /// <summary>
+    /// The TestMode gate lives HERE, inside the gateway — not at call sites —
+    /// so no code path can accidentally text a real client. When on, every
+    /// send goes to the configured test contact regardless of the intended
+    /// recipient, and the result records that it was redirected.
+    /// </summary>
+    private (string location, string contact, bool redirected) ResolveTarget(string locationId, string contactId)
+    {
+        if (!_safety.GhlTestMode) return (locationId, contactId, false);
+        if (string.IsNullOrEmpty(_safety.TestContactLocationId) || string.IsNullOrEmpty(_safety.TestContactId))
+            throw new InvalidOperationException(
+                "Safety:GhlTestMode is on but no test contact is configured (Safety:TestContactLocationId / Safety:TestContactId). " +
+                "Refusing to send rather than risk texting a real client.");
+        return (_safety.TestContactLocationId, _safety.TestContactId, true);
+    }
+
+    private static async Task EnsureWriteSucceededAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        if (response.IsSuccessStatusCode) return;
+        var body = "";
+        try { var s = await response.Content.ReadAsStringAsync(ct); body = s.Length > 300 ? s[..300] : s; } catch { }
+        throw new HttpRequestException(
+            $"GHL write returned {(int)response.StatusCode} for {response.RequestMessage?.RequestUri?.GetLeftPart(UriPartial.Path)}: {body}",
+            inner: null, statusCode: response.StatusCode);
+    }
+
+    private HttpRequestMessage BuildJsonRequest(HttpMethod method, string relativeUrl, string token, string json)
+    {
+        var request = new HttpRequestMessage(method, relativeUrl)
+        {
+            Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return request;
     }
 
     public async Task<IReadOnlyList<GhlConversationDto>> SearchConversationsAsync(

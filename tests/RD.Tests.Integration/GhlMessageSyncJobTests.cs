@@ -33,7 +33,8 @@ public sealed class GhlMessageSyncJobTests : IDisposable
             Locations = [new GhlLocationOptions { LocationId = "loc_1", Token = "pit_test_token" }],
         });
         var gateway = new GhlGateway(
-            new HttpClient(), options, new RetryHelper { BaseDelay = TimeSpan.FromMilliseconds(1) });
+            new HttpClient(), options, Options.Create(new SafetyOptions()),
+            new RetryHelper { BaseDelay = TimeSpan.FromMilliseconds(1) });
         return new GhlMessageSyncJob(_db.Factory, gateway, options, _clock, NullLogger<GhlMessageSyncJob>.Instance);
     }
 

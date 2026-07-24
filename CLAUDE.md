@@ -4,6 +4,13 @@ Automation application for Rocket Detailer — a financial control plane over Go
 
 Approved design doc: `~/.gstack/projects/IQTechSolutions-RocketDetailersV2/ivanr-main-design-20260724-000239.md` (office-hours, 2026-07-24). Core decisions: control plane not CRM replacement; billing→ads enforcement wedge ships shadow-first with a per-client Shadow→Assist→Auto ladder; SQL is source of truth; secrets never committed.
 
+## Docs index
+
+- `README.md` — overview, solution layout, build/test
+- `docs/designs/rocket-detailer-control-plane.md` — in-repo design doc (vision, scope, milestones)
+- `CHANGELOG.md` — notable changes per milestone
+- `TODOS.md` — deliberately deferred work, with context
+
 ## Skill routing
 
 When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.

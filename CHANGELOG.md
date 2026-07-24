@@ -6,6 +6,11 @@ Format: `## [MAJOR.MINOR.PATCH.MICRO] - YYYY-MM-DD` with Added / Changed / Fixed
 
 ## [0.0.0.1] - 2026-07-24
 
+### Added
+
+- M1 — event log and ledger: solution scaffold with hardened schema and seed importer; vendor gateways, sync jobs, projections, and idempotent ledger ingestion; EligibilityPolicy pure function with golden tests; MudBlazor cockpit (clients, reconciliation work queue) with Hangfire wiring and shadow verdicts surfaced in the queue.
+- M2 — enforcement wedge: Stripe webhook receiver (signature verify, recoverable inbox, idempotent processing); outbox dispatcher, staging, approval CAS, safety profile, and delivery-verify jobs; mapping-fix wizard (evidence, blast-radius, verify, Shadow→Assist promotion) and kill-switch UI.
+
 ### Fixed
 
 - Resolved a high-severity security advisory (GHSA-5crp-9r3c-p9vr): the app previously shipped Newtonsoft.Json 11.0.1 pulled in through Hangfire. All projects that consume RD.Infrastructure (RD.Web, RD.Tools.Import) now resolve Newtonsoft.Json 13.0.4 via a single pin there, so builds are clean of the NU1903 audit warning and future consumers of RD.Infrastructure inherit the safe version automatically.

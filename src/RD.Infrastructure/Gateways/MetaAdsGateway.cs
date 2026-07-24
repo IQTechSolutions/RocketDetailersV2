@@ -13,7 +13,28 @@ public interface IMetaAdsGateway
     /// <summary>Campaign-level daily insights (time_increment=1) for the inclusive date range.</summary>
     Task<IReadOnlyList<MetaInsightDto>> GetDailyInsightsAsync(
         string adAccountId, DateOnly since, DateOnly until, CancellationToken ct);
+
+    /// <summary>Pause a campaign, then read back its status to confirm convergence. Blocked by the safety profile unless the target is the canary.</summary>
+    Task<MetaWriteResult> PauseCampaignAsync(string campaignId, CancellationToken ct);
+
+    /// <summary>Resume (set ACTIVE), then read back to confirm.</summary>
+    Task<MetaWriteResult> ResumeCampaignAsync(string campaignId, CancellationToken ct);
+
+    /// <summary>Current status without mutating — used for pause-provenance read-back and revalidation.</summary>
+    Task<MetaCampaignDto?> GetCampaignAsync(string campaignId, CancellationToken ct);
 }
+
+/// <summary>The write's outcome plus the read-back evidence. Convergence is judged on the OBSERVED effective status, not the API's success flag.</summary>
+public sealed record MetaWriteResult(
+    string CampaignId,
+    string RequestedStatus,
+    string ObservedStatus,
+    string ObservedEffectiveStatus,
+    string? RemoteVersion,
+    bool Converged);
+
+/// <summary>Thrown when the safety profile refuses a Meta write (production writes disabled and the target is not the canary).</summary>
+public sealed class MetaWriteBlockedException(string message) : InvalidOperationException(message);
 
 /// <summary>DailyBudget is converted from Meta minor units (cents) to a major-unit decimal.</summary>
 public sealed record MetaCampaignDto(
@@ -43,14 +64,63 @@ public sealed class MetaAdsGateway : IMetaAdsGateway
 
     private readonly HttpClient _http;
     private readonly RetryHelper _retry;
+    private readonly SafetyOptions _safety;
 
-    public MetaAdsGateway(HttpClient http, IOptions<MetaOptions> options, RetryHelper retry)
+    public MetaAdsGateway(HttpClient http, IOptions<MetaOptions> options, IOptions<SafetyOptions> safety, RetryHelper retry)
     {
         _http = http;
         _retry = retry;
+        _safety = safety.Value;
         var o = options.Value;
         _http.BaseAddress = new Uri(o.BaseUrl.TrimEnd('/') + "/");
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", o.AccessToken);
+    }
+
+    public Task<MetaWriteResult> PauseCampaignAsync(string campaignId, CancellationToken ct)
+        => SetStatusAsync(campaignId, "PAUSED", ct);
+
+    public Task<MetaWriteResult> ResumeCampaignAsync(string campaignId, CancellationToken ct)
+        => SetStatusAsync(campaignId, "ACTIVE", ct);
+
+    private async Task<MetaWriteResult> SetStatusAsync(string campaignId, string desiredStatus, CancellationToken ct)
+    {
+        // Safety gate: production writes disabled ⇒ the ONLY writable target is the canary.
+        if (!_safety.AllowProductionMetaWrites && campaignId != _safety.CanaryCampaignId)
+            throw new MetaWriteBlockedException(
+                $"Meta write to campaign {campaignId} refused: production Meta writes are disabled and this is not the canary campaign. " +
+                "Set Safety:AllowProductionMetaWrites=true (after the M0 gates) to enable.");
+
+        // Single POST — the outbox dispatcher owns retry; idempotency comes from read-back convergence,
+        // not from repeating the mutation. Form body keeps the token in the header only.
+        using var request = new HttpRequestMessage(HttpMethod.Post, Uri.EscapeDataString(campaignId))
+        {
+            Content = new FormUrlEncodedContent([new KeyValuePair<string, string>("status", desiredStatus)]),
+        };
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        await using (var _ = await response.Content.ReadAsStreamAsync(ct)) { }
+        response.EnsureSuccessStatusCode();
+
+        // Read-back: convergence is judged on what Meta actually reports now.
+        var current = await GetCampaignAsync(campaignId, ct)
+            ?? throw new HttpRequestException($"Campaign {campaignId} not found on read-back after {desiredStatus}.");
+
+        var converged = desiredStatus == "PAUSED"
+            ? current.EffectiveStatus is "PAUSED" or "CAMPAIGN_PAUSED"
+            : current.EffectiveStatus is "ACTIVE";
+
+        return new MetaWriteResult(campaignId, desiredStatus, current.Status, current.EffectiveStatus, current.UpdatedTime, converged);
+    }
+
+    public async Task<MetaCampaignDto?> GetCampaignAsync(string campaignId, CancellationToken ct)
+    {
+        var url = $"{Uri.EscapeDataString(campaignId)}?fields=name,status,effective_status,daily_budget,updated_time";
+        using var response = await _retry.SendAsync(_http, () => new HttpRequestMessage(HttpMethod.Get, url), ct);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+        var c = await GatewayHttp.ReadAsAsync<CampaignJson>(response, ct);
+        if (c.Id.Length == 0) return null;
+        return new MetaCampaignDto(
+            c.Id, c.Name, c.Status ?? "", c.EffectiveStatus ?? "",
+            ParseDecimal(c.DailyBudget) is { } cents ? cents / 100m : null, c.UpdatedTime);
     }
 
     public async Task<IReadOnlyList<MetaCampaignDto>> ListCampaignsAsync(string adAccountId, CancellationToken ct)

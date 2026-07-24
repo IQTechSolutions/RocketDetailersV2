@@ -7,12 +7,16 @@
     <HelpHint Text="Operational controls land here as the milestones that need them ship." />
 </MudStack>
 
-<MudPaper Elevation="1">
-    <EmptyState Icon="@Icons.Material.Outlined.Settings"
-                Title="Settings are on the way"
-                Hint="Package configuration and the audited package-edit page (M1 follow-up), working-hours calendar and freshness bounds (M2 with Assist mode), and the global kill switch (M3 with Auto mode) all live here. Nothing to configure until those ship.">
-        <MudButton Variant="Variant.Outlined" Href="/" StartIcon="@Icons.Material.Filled.SpaceDashboard">
-            Back to the cockpit
-        </MudButton>
-    </EmptyState>
-</MudPaper>
+<MudStack Spacing="3">
+    <KillSwitchCard />
+
+    <MudPaper Elevation="1">
+        <EmptyState Icon="@Icons.Material.Outlined.Settings"
+                    Title="More controls on the way"
+                    Hint="Package configuration and the audited package-edit page, the working-hours calendar and freshness bounds, and message-template editing land here as their milestones ship.">
+            <MudButton Variant="Variant.Outlined" Href="/" StartIcon="@Icons.Material.Filled.SpaceDashboard">
+                Back to the cockpit
+            </MudButton>
+        </EmptyState>
+    </MudPaper>
+</MudStack>
