@@ -18,8 +18,13 @@ public class CockpitStateService(IDbContextFactory<RdDbContext> factory, IClock 
     {
         await using var db = await factory.CreateDbContextAsync(ct);
 
-        var totalClients = await db.Clients.CountAsync(ct);
-        var masterCount = await db.Clients.CountAsync(c => c.AccountType == AccountType.Master, ct);
+        // Retired duplicates (merged into another account) aren't live clients — exclude
+        // them from every live reporting surface (headcounts AND the cash roll-up below).
+        // Their ledger still counts where it matters: the survivor's enforcement balance
+        // rolls it up (ClientStateBuilder), so no one is wrongly paused — it just doesn't
+        // show as a separate line in the top-level cockpit tiles.
+        var totalClients = await db.Clients.CountAsync(c => c.MergedIntoClientId == null, ct);
+        var masterCount = await db.Clients.CountAsync(c => c.AccountType == AccountType.Master && c.MergedIntoClientId == null, ct);
 
         var clientsLinked = await db.IdentityLinks
             .Where(l => l.System == ExternalSystem.Stripe && l.Kind == LinkKind.Subscription && l.InvalidatedAt == null)
@@ -29,7 +34,7 @@ public class CockpitStateService(IDbContextFactory<RdDbContext> factory, IClock 
 
         var campaignsLive = await db.MetaCampaigns
             .Where(m => m.EffectiveStatus == "ACTIVE" && m.ClientId != null)
-            .Join(db.Clients.Where(c => c.AccountType == AccountType.Master),
+            .Join(db.Clients.Where(c => c.AccountType == AccountType.Master && c.MergedIntoClientId == null),
                 m => m.ClientId, c => c.Id, (m, c) => c.Id)
             .Distinct()
             .CountAsync(ct);
@@ -52,7 +57,7 @@ public class CockpitStateService(IDbContextFactory<RdDbContext> factory, IClock 
 
         // Master-client ledger facts, rolled up in memory by CockpitRules (v1: hundreds of clients, fine).
         var ledger = await db.LedgerEntries
-            .Join(db.Clients.Where(c => c.AccountType == AccountType.Master),
+            .Join(db.Clients.Where(c => c.AccountType == AccountType.Master && c.MergedIntoClientId == null),
                 l => l.ClientId, c => c.Id,
                 (l, c) => new LedgerFact(l.ClientId, c.CurrencyCode, l.Type, l.SignedAmount, l.OccurredAt))
             .ToListAsync(ct);

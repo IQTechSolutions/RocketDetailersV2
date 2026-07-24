@@ -27,6 +27,17 @@ public class Client
     public DateTimeOffset CreatedAt { get; set; }
     public byte[] RowVersion { get; set; } = [];
 
+    // Merge: when two client records are really one business (a duplicate created
+    // by accident), the duplicate is retired into the survivor rather than deleted
+    // — its third-party records are live and must keep being monitored. Its links
+    // are re-parented onto the survivor (so future movement auto-attributes there);
+    // this pointer marks the duplicate as retired so it drops out of every active
+    // surface (policy evaluation, directory, cockpit, analytics) while its
+    // append-only ledger history rolls up into the survivor. Reversible: clear the
+    // pointer and move the links back.
+    public Guid? MergedIntoClientId { get; set; }
+    public DateTimeOffset? MergedAt { get; set; }
+
     public List<IdentityLink> IdentityLinks { get; set; } = [];
     public List<TrialPeriod> TrialPeriods { get; set; } = [];
 }

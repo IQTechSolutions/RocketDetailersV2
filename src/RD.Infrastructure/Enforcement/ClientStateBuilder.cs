@@ -17,13 +17,20 @@ public sealed class ClientStateBuilder(IClock clock, Microsoft.Extensions.Option
     private readonly EnforcementOptions _enf = enforcement.Value;
 
     /// <summary>Ambient facts shared across a batch — loaded once by the caller, not per client.</summary>
-    public sealed record Context(DateTimeOffset? StripeSyncedAt, DateTimeOffset? MetaSyncedAt);
+    /// <param name="MergedInto">survivor id → the ids of clients retired into it. A merged
+    /// duplicate's append-only ledger keeps its own ClientId, so the survivor's balance must
+    /// roll those rows up. Empty for the vast majority of clients (merges are rare).</param>
+    public sealed record Context(DateTimeOffset? StripeSyncedAt, DateTimeOffset? MetaSyncedAt, ILookup<Guid, Guid> MergedInto);
 
     public async Task<Context> LoadContextAsync(RdDbContext db, CancellationToken ct)
     {
         var stripe = await LatestCompleted(db, ExternalSystem.Stripe, ct);
         var meta = await LatestCompleted(db, ExternalSystem.Meta, ct);
-        return new Context(stripe, meta);
+        var merges = await db.Clients.AsNoTracking()
+            .Where(c => c.MergedIntoClientId != null)
+            .Select(c => new { Survivor = c.MergedIntoClientId!.Value, Duplicate = c.Id })
+            .ToListAsync(ct);
+        return new Context(stripe, meta, merges.ToLookup(m => m.Survivor, m => m.Duplicate));
     }
 
     /// <summary>Build one client's state. Loads only that client's rows — safe to call for a single revalidation.</summary>
@@ -72,8 +79,12 @@ public sealed class ClientStateBuilder(IClock clock, Microsoft.Extensions.Option
             .OrderByDescending(t => t.StartsAt)
             .FirstOrDefaultAsync(ct);
 
+        // Roll up the client's own ledger plus that of any duplicates retired into
+        // it — those rows are append-only and keep the duplicate's ClientId.
+        var ledgerClientIds = new List<Guid> { client.Id };
+        ledgerClientIds.AddRange(ctx.MergedInto[client.Id]);
         var ledger = await db.LedgerEntries.AsNoTracking()
-            .Where(l => l.ClientId == client.Id)
+            .Where(l => ledgerClientIds.Contains(l.ClientId))
             .GroupBy(l => l.Type)
             .Select(g => new { Type = g.Key, Sum = g.Sum(x => x.SignedAmount) })
             .ToListAsync(ct);

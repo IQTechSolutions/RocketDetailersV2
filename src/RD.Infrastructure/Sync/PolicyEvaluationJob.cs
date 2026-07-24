@@ -39,8 +39,10 @@ public sealed class PolicyEvaluationJob(
 
         var killSwitch = await GetOrCreateKillSwitchAsync(db, now, ct);
 
+        // Retired duplicates (merged into another account) are inert — their links
+        // and future movement resolve to the survivor, so never evaluate the shell.
         var clients = await db.Clients.AsNoTracking()
-            .Where(c => c.AccountType == AccountType.Master)
+            .Where(c => c.AccountType == AccountType.Master && c.MergedIntoClientId == null)
             .ToListAsync(ct);
 
         var latestByClient = (await db.Decisions.AsNoTracking()

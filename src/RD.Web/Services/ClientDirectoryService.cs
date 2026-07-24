@@ -60,6 +60,7 @@ public class ClientDirectoryService(IDbContextFactory<RdDbContext> factory, Vend
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         return await db.Clients
+            .Where(c => c.MergedIntoClientId == null) // retired duplicates drop out of the directory
             .OrderBy(c => c.BusinessName)
             .Select(c => new ClientListRow(
                 c.Id,

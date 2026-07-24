@@ -8,6 +8,7 @@ using MudBlazor.Services;
 using RD.Domain;
 using RD.Infrastructure;
 using RD.Infrastructure.Enforcement;
+using RD.Infrastructure.Reconciliation;
 using RD.Infrastructure.Slack;
 using RD.Infrastructure.Sync;
 using RD.Infrastructure.Webhooks;
@@ -62,6 +63,7 @@ builder.Services.AddScoped<AnalyticsService>();
 builder.Services.AddScoped<TrialAdminService>();
 builder.Services.AddScoped<OpsService>();
 builder.Services.AddScoped<GhlContactAdminService>();
+builder.Services.AddScoped<ClientMergeService>();
 builder.Services.AddSingleton<VendorLinks>();
 
 // Lane A gateways + sync jobs + the policy heartbeat + M2 enforcement services
