@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 Format: `## [MAJOR.MINOR.PATCH.MICRO] - YYYY-MM-DD` with Added / Changed / Fixed / Removed sections.
 
+## [0.0.0.2] - 2026-07-24
+
+### Fixed
+
+- Resolved a moderate-severity security advisory (GHSA-pgww-w46g-26qg): the test project previously resolved AngleSharp 1.4.0 through bunit, which has a known mutated-XSS parsing flaw. A direct pin lifts it to the patched 1.5.2, so builds are clean of the NU1902 audit warning.
+
 ## [0.0.0.1] - 2026-07-24
 
 ### Added
