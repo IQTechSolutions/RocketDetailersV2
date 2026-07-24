@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RD.Domain/RD.Domain.csproj" />
+    <Project Path="src/RD.Infrastructure/RD.Infrastructure.csproj" />
+    <Project Path="src/RD.Tools.Import/RD.Tools.Import.csproj" />
+    <Project Path="src/RD.Web/RD.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RD.Tests.Integration/RD.Tests.Integration.csproj" />
+    <Project Path="tests/RD.Tests/RD.Tests.csproj" />
+  </Folder>
+</Solution>
