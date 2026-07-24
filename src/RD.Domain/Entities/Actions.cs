@@ -35,6 +35,8 @@ public class OutboxAction
     public long ExpectedKillSwitchEpoch { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? ExecutedAt { get; set; }
+    /// <summary>Set once by the Slack notifier so each AwaitingApproval action is posted to Slack exactly once. Null = not yet notified.</summary>
+    public DateTimeOffset? SlackNotifiedAt { get; set; }
     public byte[] RowVersion { get; set; } = [];
 }
 

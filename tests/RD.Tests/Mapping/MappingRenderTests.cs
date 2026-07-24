@@ -19,6 +19,11 @@ public class MappingRenderTests : BunitContext, IAsyncLifetime
     {
         Services.AddMudServices();
         JSInterop.Mode = JSRuntimeMode.Loose;
+        // The panel's Verify/Promote controls are Operator-gated (AuthorizeView) —
+        // give the render an authenticated Operator so those controls appear.
+        var auth = this.AddAuthorization();
+        auth.SetAuthorized("operator@test");
+        auth.SetRoles("Operator");
     }
 
     public Task InitializeAsync() => Task.CompletedTask;

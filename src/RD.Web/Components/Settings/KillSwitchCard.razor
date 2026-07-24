@@ -1,6 +1,7 @@
 @inject RD.Infrastructure.Enforcement.KillSwitchService KillSwitch
 @inject IDialogService Dialogs
 @inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
 
 @* The global stop. Engaging reverts every client to Shadow and supersedes all
    in-flight actions via an epoch bump. Deliberately blunt and obvious. *@
@@ -16,17 +17,30 @@
         <MudAlert Severity="Severity.Error" Class="mb-3" Icon="@Icons.Material.Filled.Warning">
             Enforcement is STOPPED. Every client is in Shadow mode — the engine observes but takes no action.
         </MudAlert>
-        <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.PlayArrow"
-                   OnClick="@(() => ToggleAsync(engage: false))">Release the kill switch</MudButton>
     }
     else
     {
         <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
             Enforcement is live for any client in Assist or Auto mode. Engage this to halt everything at once.
         </MudText>
-        <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Stop"
-                   OnClick="@(() => ToggleAsync(engage: true))">Engage the kill switch</MudButton>
     }
+    <AuthorizeView Roles="@Roles.OperatorRolesCsv">
+        <Authorized>
+            @if (_engaged)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.PlayArrow"
+                           OnClick="@(() => ToggleAsync(engage: false))">Release the kill switch</MudButton>
+            }
+            else
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Stop"
+                           OnClick="@(() => ToggleAsync(engage: true))">Engage the kill switch</MudButton>
+            }
+        </Authorized>
+        <NotAuthorized>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">The kill switch requires the Operator role.</MudText>
+        </NotAuthorized>
+    </AuthorizeView>
 </MudPaper>
 
 @code {
@@ -43,8 +57,9 @@
         var ok = await Dialogs.ShowMessageBoxAsync($"{verb} kill switch", body, yesText: verb, cancelText: "Cancel");
         if (ok != true) return;
 
-        if (engage) await KillSwitch.EngageAsync("operator", "Engaged from Settings.");
-        else await KillSwitch.ReleaseAsync("operator", "Released from Settings.");
+        var actor = (await AuthProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "operator";
+        if (engage) await KillSwitch.EngageAsync(actor, "Engaged from Settings.");
+        else await KillSwitch.ReleaseAsync(actor, "Released from Settings.");
 
         _engaged = engage;
         Snackbar.Add(engage ? "Kill switch ENGAGED — all enforcement stopped." : "Kill switch released.", engage ? Severity.Error : Severity.Success);

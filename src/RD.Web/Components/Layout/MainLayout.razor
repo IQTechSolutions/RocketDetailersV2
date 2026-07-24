@@ -19,6 +19,12 @@
                            OnClick="@(() => _isDarkMode = !_isDarkMode)"
                            aria-label="Toggle dark mode" />
         </MudTooltip>
+        <AuthorizeView>
+            <MudTooltip Arrow="true" Text="@context.User.Identity?.Name">
+                <MudIcon Icon="@Icons.Material.Filled.AccountCircle" Class="ml-2" />
+            </MudTooltip>
+            <MudButton Href="/Account/Logout" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.Logout" Class="ml-1">Sign out</MudButton>
+        </AuthorizeView>
     </MudAppBar>
 
     <MudDrawer @bind-Open="_drawerOpen" ClipMode="DrawerClipMode.Always" Elevation="0"

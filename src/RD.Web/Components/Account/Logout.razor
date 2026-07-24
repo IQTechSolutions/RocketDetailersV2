@@ -1,0 +1,40 @@
+@page "/Account/Logout"
+@attribute [ExcludeFromInteractiveRouting]
+@using Microsoft.AspNetCore.Identity
+@using RD.Infrastructure
+@using RD.Web.Identity
+@inject SignInManager<AppUser> SignInManager
+@inject NavigationManager Nav
+
+<PageTitle>Sign out — Rocket Detailer Control Plane</PageTitle>
+
+<div class="rd-auth-shell">
+    <div class="rd-auth-card">
+        <div class="rd-auth-brand">🚀 Rocket Detailer</div>
+        <div class="rd-auth-sub">Sign out of the Control Plane?</div>
+        <EditForm Model="_form" method="post" OnValidSubmit="DoLogout" FormName="logout">
+            <button type="submit" class="rd-auth-btn">Sign out</button>
+        </EditForm>
+        <a href="/" class="rd-auth-cancel">Cancel</a>
+    </div>
+</div>
+
+<style>
+    .rd-auth-shell { display:flex; align-items:center; justify-content:center; min-height:100vh; background:#0b1220; }
+    .rd-auth-card { width:340px; padding:32px; border-radius:12px; background:#141d2e; color:#e6ebf5; box-shadow:0 12px 40px rgba(0,0,0,.4); font-family:-apple-system,"Segoe UI",sans-serif; text-align:center; }
+    .rd-auth-brand { font-size:22px; font-weight:700; }
+    .rd-auth-sub { color:#8aa0c6; margin:8px 0 20px; }
+    .rd-auth-btn { width:100%; padding:11px; border:0; border-radius:8px; background:#3b6fe0; color:#fff; font-weight:600; cursor:pointer; }
+    .rd-auth-cancel { display:inline-block; margin-top:14px; color:#8aa0c6; font-size:13px; }
+</style>
+
+@code {
+    [CascadingParameter] private HttpContext HttpContext { get; set; } = default!;
+    private readonly object _form = new();
+
+    private async Task DoLogout()
+    {
+        await SignInManager.SignOutAsync();
+        Nav.NavigateTo("/Account/Login");
+    }
+}

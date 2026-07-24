@@ -1,4 +1,5 @@
 @page "/ladder"
+@attribute [Authorize]
 @using RD.Infrastructure.Enforcement
 @inject PromotionService Promotions
 @inject IDialogService Dialogs
@@ -68,13 +69,15 @@ else
                                 </MudChip>
                             </MudStack>
                         </div>
-                        <MudTooltip Arrow="true" Text="@(row.Assessment.CanPromote ? "Promote this client to Auto mode" : string.Join(" ", row.Assessment.Blockers))">
-                            <span>
-                                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(!row.Assessment.CanPromote)"
-                                           StartIcon="@Icons.Material.Filled.AutoMode"
-                                           OnClick="@(() => PromoteAsync(row))">Promote to Auto</MudButton>
-                            </span>
-                        </MudTooltip>
+                        <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
+                            <MudTooltip Arrow="true" Text="@(row.Assessment.CanPromote ? "Promote this client to Auto mode" : string.Join(" ", row.Assessment.Blockers))">
+                                <span>
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(!row.Assessment.CanPromote)"
+                                               StartIcon="@Icons.Material.Filled.AutoMode"
+                                               OnClick="@(() => PromoteAsync(row))">Promote to Auto</MudButton>
+                                </span>
+                            </MudTooltip>
+                        </AuthorizeView>
                     </MudStack>
                     @if (!row.Assessment.CanPromote)
                     {
@@ -97,8 +100,10 @@ else
                             <MudIcon Icon="@Icons.Material.Filled.AutoMode" Color="Color.Primary" />
                             <MudText Typo="Typo.subtitle1">@name</MudText>
                         </MudStack>
-                        <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.SouthWest"
-                                   OnClick="@(() => DemoteAsync(id, name))">Step down to Assist</MudButton>
+                        <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
+                            <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.SouthWest"
+                                       OnClick="@(() => DemoteAsync(id, name))">Step down to Assist</MudButton>
+                        </AuthorizeView>
                     </MudStack>
                 </MudPaper>
             }
