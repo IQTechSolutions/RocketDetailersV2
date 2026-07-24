@@ -23,7 +23,10 @@ public class AnalyticsService(IDbContextFactory<RdDbContext> factory, IClock clo
     {
         await using var db = await factory.CreateDbContextAsync(ct);
 
-        var masters = db.Clients.Where(c => c.AccountType == AccountType.Master);
+        // Live master clients only — retired duplicates (merged into another account)
+        // drop out of analytics; their history rolls into the survivor's enforcement
+        // balance, not the top-level charts.
+        var masters = db.Clients.Where(c => c.AccountType == AccountType.Master && c.MergedIntoClientId == null);
 
         // Per master-client metadata (name, currency, mode, package name via LEFT JOIN).
         var masterClients = await masters
@@ -67,8 +70,9 @@ public class AnalyticsService(IDbContextFactory<RdDbContext> factory, IClock clo
             .Select(g => new MappingGap(g.Key, g.Count()))
             .ToListAsync(ct);
 
-        // Client mix: AccountType × ContractType over ALL clients.
+        // Client mix: AccountType × ContractType over all live clients (retired duplicates excluded).
         var segments = await db.Clients
+            .Where(c => c.MergedIntoClientId == null)
             .GroupBy(c => new { c.AccountType, c.ContractType })
             .Select(g => new ClientSegmentFact(g.Key.AccountType, g.Key.ContractType, g.Count()))
             .ToListAsync(ct);

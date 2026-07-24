@@ -1,0 +1,131 @@
+@* Merge a duplicate client into a surviving one. The duplicate is retired (never
+   deleted) so its live Stripe/Meta/GHL records keep being monitored under the survivor. *@
+@using RD.Domain
+@using RD.Web.Services
+@using RD.Infrastructure.Reconciliation
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ClientDirectoryService Directory
+@inject ClientMergeService Merge
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Merge duplicate account</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+            Two records for the same business? Merge them. The duplicate's Stripe, Meta and GHL
+            links move to the surviving account and its history rolls up — the duplicate is
+            <b>retired, not deleted</b>, so its live vendor records keep being monitored under the survivor.
+        </MudText>
+
+        <MudText Typo="Typo.body2"><b>This account:</b> @CurrentClientName</MudText>
+
+        <MudAutocomplete T="ClientListRow" Label="The other account (the duplicate)"
+                         Value="_other" ValueChanged="OnOtherChanged" SearchFunc="@SearchAsync"
+                         ToStringFunc="@DisplayName" Variant="Variant.Outlined" Class="mt-3"
+                         Clearable="true" ResetValueOnEmptyText="true" CoerceText="false" MaxItems="50"
+                         Placeholder="Search by business or contact name" />
+
+        @if (_other is not null)
+        {
+            <MudText Typo="Typo.subtitle2" Class="mt-4 mb-1">Which account survives?</MudText>
+            <MudRadioGroup T="Guid" Value="_survivorId" ValueChanged="OnSurvivorChanged">
+                <MudRadio T="Guid" Value="@CurrentClientId" Color="Color.Primary" Dense="true">
+                    Keep <b>@CurrentClientName</b> — retire the other
+                </MudRadio>
+                <MudRadio T="Guid" Value="@_other.Id" Color="Color.Primary" Dense="true">
+                    Keep <b>@_other.BusinessName</b> — retire @CurrentClientName
+                </MudRadio>
+            </MudRadioGroup>
+
+            @if (_preview is not null && _preview.Blocked is not null)
+            {
+                <MudAlert Severity="Severity.Error" Class="mt-3" Dense="true">@_preview.Blocked</MudAlert>
+            }
+            else if (_preview is not null)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mt-3" Dense="true">
+                    Retiring <b>@_preview.DuplicateName</b> into <b>@_preview.SurvivorName</b>:
+                    @_preview.LinksToMove link(s) move · @_preview.LedgerRowsToRollUp ledger row(s) roll up ·
+                    @_preview.TrialsToMove trial(s) move · @_preview.OpenInvestigationsToClose open item(s) close.
+                    The survivor keeps its own details, filling any blanks from the retired account.
+                </MudAlert>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="@(_busy || _other is null || _preview is null || _preview.Blocked is not null)"
+                   OnClick="ConfirmAsync">
+            @(_busy ? "Merging…" : "Merge")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    [Parameter, EditorRequired] public Guid CurrentClientId { get; set; }
+    [Parameter] public string CurrentClientName { get; set; } = "";
+
+    private List<ClientListRow> _all = [];
+    private ClientListRow? _other;
+    private Guid _survivorId;
+    private MergePreview? _preview;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _survivorId = CurrentClientId; // default: keep the account we opened from
+        _all = (await Directory.GetAllAsync()).Where(r => r.Id != CurrentClientId).ToList();
+    }
+
+    private static string DisplayName(ClientListRow? r) => r is null
+        ? ""
+        : string.IsNullOrWhiteSpace(r.ContactName) ? r.BusinessName : $"{r.BusinessName} · {r.ContactName}";
+
+    private Task<IEnumerable<ClientListRow>> SearchAsync(string value, CancellationToken token)
+    {
+        IEnumerable<ClientListRow> hits = string.IsNullOrWhiteSpace(value)
+            ? _all
+            : _all.Where(r =>
+                r.BusinessName.Contains(value, StringComparison.OrdinalIgnoreCase)
+                || (r.ContactName?.Contains(value, StringComparison.OrdinalIgnoreCase) ?? false));
+        return Task.FromResult(hits.Take(50));
+    }
+
+    private async Task OnOtherChanged(ClientListRow? row)
+    {
+        _other = row;
+        _survivorId = CurrentClientId; // reset direction to the default on a new pick
+        await RefreshPreviewAsync();
+    }
+
+    private async Task OnSurvivorChanged(Guid id)
+    {
+        _survivorId = id;
+        await RefreshPreviewAsync();
+    }
+
+    private async Task RefreshPreviewAsync()
+    {
+        if (_other is null) { _preview = null; return; }
+        var duplicateId = _survivorId == CurrentClientId ? _other.Id : CurrentClientId;
+        _preview = await Merge.PreviewAsync(_survivorId, duplicateId);
+    }
+
+    private async Task ConfirmAsync()
+    {
+        if (_other is null || _preview?.Blocked is not null) return;
+        _busy = true;
+        var duplicateId = _survivorId == CurrentClientId ? _other.Id : CurrentClientId;
+        var actor = (await AuthProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "operator";
+        var result = await Merge.MergeAsync(_survivorId, duplicateId, actor);
+        _busy = false;
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        if (result.Ok) Dialog!.Close(DialogResult.Ok(result.SurvivorId!.Value));
+    }
+}

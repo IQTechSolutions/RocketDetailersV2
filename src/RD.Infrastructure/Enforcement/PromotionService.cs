@@ -48,7 +48,7 @@ public sealed class PromotionService(IDbContextFactory<RdDbContext> dbFactory, I
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var counts = await db.Clients.AsNoTracking()
-            .Where(c => c.AccountType == AccountType.Master)
+            .Where(c => c.AccountType == AccountType.Master && c.MergedIntoClientId == null)
             .GroupBy(c => c.EnforcementMode)
             .Select(g => new { Mode = g.Key, Count = g.Count() })
             .ToListAsync(ct);
