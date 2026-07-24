@@ -33,6 +33,7 @@ public static class SyncServiceCollectionExtensions
         services.AddScoped<StripeSyncJob>();
         services.AddScoped<MetaSyncJob>();
         services.AddScoped<GhlMessageSyncJob>();
+        services.AddScoped<PolicyEvaluationJob>();
 
         return services;
     }

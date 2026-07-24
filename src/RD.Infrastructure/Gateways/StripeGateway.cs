@@ -50,9 +50,6 @@ public sealed record StripeInvoiceDto(
 /// </summary>
 public sealed class StripeGateway : IStripeGateway
 {
-    /// <summary>Pinned Stripe API version — bump deliberately, with tests, never implicitly.</summary>
-    public const string ApiVersion = "2026-06-30.basil";
-
     private const int PageSize = 100;
     private const int MaxPages = 200; // safety valve against a vendor-side pagination loop
 
@@ -66,7 +63,12 @@ public sealed class StripeGateway : IStripeGateway
         var o = options.Value;
         _http.BaseAddress = new Uri(o.BaseUrl.TrimEnd('/') + "/");
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", o.ApiKey);
-        _http.DefaultRequestHeaders.Add("Stripe-Version", ApiVersion);
+        // Pin via "Stripe:ApiVersion" once the account's version is confirmed
+        // in M0 — an unset pin uses the ACCOUNT default, which is stable per
+        // account; a wrong guess hard-fails every request (seen live: 400
+        // "Invalid Stripe API version"). Bump deliberately, with tests.
+        if (!string.IsNullOrEmpty(o.ApiVersion))
+            _http.DefaultRequestHeaders.Add("Stripe-Version", o.ApiVersion);
     }
 
     public async Task<IReadOnlyList<StripeSubscriptionDto>> ListSubscriptionsAsync(CancellationToken ct)

@@ -13,6 +13,8 @@ public sealed class StripeOptions
 
     public string ApiKey { get; set; } = "";
     public string BaseUrl { get; set; } = "https://api.stripe.com";
+    /// <summary>Optional Stripe-Version pin. Empty = account default version. Set after M0 confirms the account's version.</summary>
+    public string ApiVersion { get; set; } = "";
 }
 
 public sealed class MetaOptions

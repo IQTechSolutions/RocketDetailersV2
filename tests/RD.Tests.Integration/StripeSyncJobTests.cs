@@ -27,7 +27,7 @@ public sealed class StripeSyncJobTests : IDisposable
 
     private StripeSyncJob CreateJob()
     {
-        var options = Options.Create(new StripeOptions { ApiKey = "rk_test_dummy", BaseUrl = _server.Urls[0] });
+        var options = Options.Create(new StripeOptions { ApiKey = "rk_test_dummy", BaseUrl = _server.Urls[0], ApiVersion = "2025-03-31.basil" });
         var gateway = new StripeGateway(
             new HttpClient(), options, new RetryHelper { BaseDelay = TimeSpan.FromMilliseconds(1) });
         return new StripeSyncJob(_db.Factory, gateway, _clock, NullLogger<StripeSyncJob>.Instance);
@@ -109,7 +109,7 @@ public sealed class StripeSyncJobTests : IDisposable
             .ToList();
         subscriptionRequests.Should().NotBeEmpty();
         subscriptionRequests.Should().OnlyContain(e =>
-            e.Header("Stripe-Version") == StripeGateway.ApiVersion
+            e.Header("Stripe-Version") == "2025-03-31.basil" // sent when configured; unset pin = account default
             && e.Header("Authorization") == "Bearer rk_test_dummy");
     }
 

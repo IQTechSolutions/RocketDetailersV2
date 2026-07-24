@@ -3,6 +3,11 @@ using Microsoft.EntityFrameworkCore;
 using RD.Domain;
 using RD.Domain.Entities;
 using RD.Infrastructure;
+using RD.Tools.Import;
+
+// "sync" verb: one-shot vendor sync + policy evaluation (see SyncRunner).
+if (args.Length > 0 && args[0].Equals("sync", StringComparison.OrdinalIgnoreCase))
+    return await SyncRunner.RunAsync(args);
 
 // Seed importer: one-time load of the reconciliation spreadsheet into SQL.
 // Disposable by design (design doc: "one-time spreadsheet import code").
