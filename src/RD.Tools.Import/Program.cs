@@ -25,6 +25,10 @@ if (args.Length > 0 && args[0].Equals("link-meta", StringComparison.OrdinalIgnor
 if (args.Length > 0 && args[0].Equals("link-ghl", StringComparison.OrdinalIgnoreCase))
     return await GhlLinkRunner.RunAsync(args);
 
+// "link-ghl-live" verb: search all GHL locations by email/phone/name to link the rest (see LinkGhlLiveRunner).
+if (args.Length > 0 && args[0].Equals("link-ghl-live", StringComparison.OrdinalIgnoreCase))
+    return await LinkGhlLiveRunner.RunAsync(args);
+
 // "mark-master" verb: set AccountType=Master from the sheet's "Master Ad Account?" column (see MarkMasterRunner).
 if (args.Length > 0 && args[0].Equals("mark-master", StringComparison.OrdinalIgnoreCase))
     return await MarkMasterRunner.RunAsync(args);
