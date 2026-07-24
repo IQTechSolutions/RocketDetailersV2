@@ -1,0 +1,18 @@
+<Project>
+  <!-- Single source of truth for the app version: the VERSION file at the repo
+       root (MAJOR.MINOR.PATCH.MICRO), bumped by the /ship workflow.
+       Directory.Build.targets fails the build loudly if the file is missing or
+       malformed — no silent fallback version. -->
+  <PropertyGroup>
+    <RdVersionFile>$(MSBuildThisFileDirectory)VERSION</RdVersionFile>
+    <!-- Clear first so a stray RdVersion environment variable can never leak in. -->
+    <RdVersion></RdVersion>
+    <RdVersion Condition="Exists('$(RdVersionFile)')">$([System.IO.File]::ReadAllText('$(RdVersionFile)').Trim())</RdVersion>
+    <RdVersionValid>false</RdVersionValid>
+    <RdVersionValid Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(RdVersion)', '^\d+\.\d+\.\d+\.\d+$'))">true</RdVersionValid>
+    <!-- VersionPrefix (not Version) so a VersionSuffix passed on the CLI still composes. -->
+    <VersionPrefix Condition="'$(RdVersionValid)' == 'true'">$(RdVersion)</VersionPrefix>
+    <AssemblyVersion Condition="'$(RdVersionValid)' == 'true'">$(RdVersion)</AssemblyVersion>
+    <FileVersion Condition="'$(RdVersionValid)' == 'true'">$(RdVersion)</FileVersion>
+  </PropertyGroup>
+</Project>
