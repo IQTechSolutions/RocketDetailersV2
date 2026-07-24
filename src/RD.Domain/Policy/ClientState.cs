@@ -53,6 +53,15 @@ public sealed record ClientState
     // Money & freshness
     public decimal Exposure { get; init; }
     public decimal MaxLossCap { get; init; } = 200m;
+
+    // Arrangement balance (Step 3): cumulative money in vs. master-account ad spend,
+    // measured against the client's payment arrangement.
+    public decimal TotalPaid { get; init; }
+    public decimal TotalAdSpend { get; init; }
+    /// <summary>Expected payment per cadence (inferred or confirmed); null when there is no arrangement.</summary>
+    public decimal? ArrangementAmount { get; init; }
+    public ArrangementStatus ArrangementStatus { get; init; } = ArrangementStatus.Unknown;
+
     public DateTimeOffset? StripeSyncedAt { get; init; }
     public DateTimeOffset? MetaSyncedAt { get; init; }
     public required DateTimeOffset EvaluatedAt { get; init; }

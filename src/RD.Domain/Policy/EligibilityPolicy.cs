@@ -84,13 +84,30 @@ public static class EligibilityPolicy
                 "Payment received but the subscription is canceled — needs the re-subscribe flow, not auto-resume.",
                 InvestigationKind.CanceledSubPayment);
 
-        // 6. Hard ceiling on how much unbilled spend one client can accumulate.
+        // 6. Arrangement balance — the owner's core rule, a CLIENT-SPECIFIC threshold.
+        // The client's payments must cover the master-account ad spend the agency
+        // fronts; once they fall more than one expected payment behind
+        // (paid − ad spend < −one period), pause. Fires only on an established
+        // (inferred/confirmed) arrangement, and takes precedence over the generic
+        // max-loss ceiling below — which backstops clients WITHOUT an arrangement.
+        if (s.ArrangementStatus is ArrangementStatus.Inferred or ArrangementStatus.Confirmed
+            && s.ArrangementAmount is { } expected && expected > 0m)
+        {
+            var balance = s.TotalPaid - s.TotalAdSpend;
+            if (balance < -expected)
+                return Gated(s, new(ProposedActionType.Pause,
+                    $"Behind on arrangement — paid {s.TotalPaid:0.##} vs ad spend {s.TotalAdSpend:0.##} (balance {balance:0.##}), more than one {expected:0.##} payment short. Pause.",
+                    TargetCampaignIds: ActiveCampaigns(s)));
+        }
+
+        // 7. Hard ceiling — generic backstop on unbilled spend (no arrangement, or
+        // behind within one period's grace but still over the absolute cap).
         if (s.Exposure > s.MaxLossCap)
             return new(ProposedActionType.Escalate,
                 $"Exposure {s.Exposure:0.##} exceeds the max-loss cap {s.MaxLossCap:0.##} — human decision required.",
                 InvestigationKind.ExposureCapExceeded);
 
-        // 7. Open dunning case — the pause trigger lives here.
+        // 8. Open dunning case — the Stripe-failure pause trigger lives here.
         if (s.Dunning is { } d)
         {
             if (d.OldestUnverifiedSince is { } u && s.EvaluatedAt - u > UnverifiedSendEscalationAfter)
