@@ -33,10 +33,17 @@ public sealed class ClientStateBuilder(IClock clock, Microsoft.Extensions.Option
             .Where(l => l.ClientId == client.Id && l.InvalidatedAt == null)
             .ToListAsync(ct);
 
-        var subLink = links.FirstOrDefault(l => l is { System: ExternalSystem.Stripe, Kind: LinkKind.Subscription });
-        StripeSubscriptionProj? sub = null;
-        if (subLink is not null)
-            sub = await db.StripeSubscriptions.AsNoTracking().FirstOrDefaultAsync(s => s.SubscriptionId == subLink.ExternalId, ct);
+        // A client can own SEVERAL Stripe subscriptions (multi-account). Load them
+        // all and take the most-active status: one active sub makes the client
+        // billable even if another is canceled, so "best status" never pauses a
+        // paying client. Per-subscription delinquency is still caught below via the
+        // ClientId-scoped open-invoice signals.
+        var subExternalIds = links.Where(l => l is { System: ExternalSystem.Stripe, Kind: LinkKind.Subscription })
+            .Select(l => l.ExternalId).ToList();
+        List<StripeSubscriptionProj> subs = subExternalIds.Count == 0
+            ? []
+            : await db.StripeSubscriptions.AsNoTracking().Where(s => subExternalIds.Contains(s.SubscriptionId)).ToListAsync(ct);
+        var effectiveSubStatus = BestSubscriptionStatus(subs.Select(s => s.Status));
 
         var campaignIds = links.Where(l => l is { System: ExternalSystem.Meta, Kind: LinkKind.Campaign })
             .Select(l => l.ExternalId).ToList();
@@ -77,7 +84,7 @@ public sealed class ClientStateBuilder(IClock clock, Microsoft.Extensions.Option
         var now = clock.UtcNow;
         var mappingComplete =
             links.Any(l => l is { System: ExternalSystem.Stripe, Kind: LinkKind.Customer }) &&
-            subLink is not null &&
+            subExternalIds.Count > 0 &&
             campaignIds.Count > 0 &&
             links.Any(l => l is { System: ExternalSystem.Ghl, Kind: LinkKind.Contact });
 
@@ -101,7 +108,7 @@ public sealed class ClientStateBuilder(IClock clock, Microsoft.Extensions.Option
             TrialExpiresAt = trial?.ExpiresAt,
             TrialSpend = trial is null ? 0m : adSpend,
             TrialSpendCap = trial?.SpendCapSnapshot,
-            SubscriptionStatus = sub?.Status,
+            SubscriptionStatus = effectiveSubStatus,
             OpenUnpaidInvoices = openInvoices.Count(i => i.DueDate < now || i.Status == "uncollectible"),
             PaymentReceivedForCanceledSub = false, // webhook-era signal, populated by the Stripe receiver
             Dunning = dunningCase is null ? null : ToDunningState(dunningCase, _enf.DunningCadence),
@@ -132,6 +139,30 @@ public sealed class ClientStateBuilder(IClock clock, Microsoft.Extensions.Option
             NextStepDueAt: nextDue < c.WindowExpiresAt ? nextDue : null,
             AllSendsVerified: triggered.All(a => a.VerifiedAt != null),
             OldestUnverifiedSince: triggered.Where(a => a.VerifiedAt == null).Min(a => (DateTimeOffset?)a.TriggeredAt));
+    }
+
+    /// <summary>
+    /// The client's effective subscription status when they own several: the most
+    /// active one wins. Ranking (best→worst) active, trialing, past_due, unpaid,
+    /// incomplete, canceled, …; unknown statuses rank last. Null when there are no
+    /// subscription projections. This is what keeps a paying client (one active
+    /// sub) from being read as canceled because another sub lapsed.
+    /// </summary>
+    private static readonly string[] StatusRank =
+        ["active", "trialing", "past_due", "unpaid", "incomplete", "paused", "canceled", "incomplete_expired"];
+
+    public static string? BestSubscriptionStatus(IEnumerable<string?> statuses)
+    {
+        string? best = null;
+        var bestRank = int.MaxValue;
+        foreach (var status in statuses)
+        {
+            if (string.IsNullOrEmpty(status)) continue;
+            var rank = Array.IndexOf(StatusRank, status);
+            if (rank < 0) rank = StatusRank.Length; // unknown → worst
+            if (rank < bestRank) { bestRank = rank; best = status; }
+        }
+        return best;
     }
 
     private static async Task<DateTimeOffset?> LatestCompleted(RdDbContext db, ExternalSystem system, CancellationToken ct) =>
