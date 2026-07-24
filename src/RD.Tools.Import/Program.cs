@@ -17,6 +17,10 @@ if (args.Length > 0 && args[0].Equals("seed-user", StringComparison.OrdinalIgnor
 if (args.Length > 0 && args[0].Equals("discover", StringComparison.OrdinalIgnoreCase))
     return await StripeDiscoveryRunner.RunAsync(args);
 
+// "link-meta" verb: read-only Meta sweep → attach campaigns to clients via the sheet crosswalk (see MetaLinkRunner).
+if (args.Length > 0 && args[0].Equals("link-meta", StringComparison.OrdinalIgnoreCase))
+    return await MetaLinkRunner.RunAsync(args);
+
 // Seed importer: one-time load of the reconciliation spreadsheet into SQL.
 // Disposable by design (design doc: "one-time spreadsheet import code").
 // Usage: dotnet run --project src/RD.Tools.Import -- "<xlsx path>" [--conn "<connection string>"] [--force]
