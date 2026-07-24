@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using RD.Domain;
 using RD.Domain.Entities;
 using RD.Infrastructure.Gateways;
@@ -16,11 +17,10 @@ namespace RD.Infrastructure.Sync;
 public sealed class StripeSyncJob(
     IDbContextFactory<RdDbContext> dbFactory,
     IStripeGateway stripe,
+    IOptions<StripeOptions> options,
     IClock clock,
     ILogger<StripeSyncJob> logger)
 {
-    /// <summary>Invoice sweep window; OPEN invoices are always swept regardless of age.</summary>
-    public static readonly TimeSpan RecentInvoiceWindow = TimeSpan.FromDays(30);
 
     public async Task RunAsync(CancellationToken ct)
     {
@@ -46,6 +46,9 @@ public sealed class StripeSyncJob(
     private async Task<int> SweepAsync(RdDbContext db, CancellationToken ct)
     {
         var now = clock.UtcNow;
+        // Ledger sweep window (open invoices are always swept regardless of age).
+        // Configurable so a one-off backfill can pull full history.
+        var window = TimeSpan.FromDays(Math.Max(1, options.Value.LedgerLookbackDays));
 
         // Active identity links resolve vendor ids → ClientId. Invalidated links
         // never resolve (drift demotes; a stale mapping must not route money).
@@ -90,7 +93,7 @@ public sealed class StripeSyncJob(
         // --- Invoices: ALL open ones (age-independent — they gate eligibility)
         // plus a recent window (catches paid / uncollectible transitions).
         var openInvoices = await stripe.ListInvoicesAsync("open", null, ct);
-        var recentInvoices = await stripe.ListInvoicesAsync(null, now - RecentInvoiceWindow, ct);
+        var recentInvoices = await stripe.ListInvoicesAsync(null, now - window, ct);
         var invoices = openInvoices.Concat(recentInvoices)
             .GroupBy(i => i.Id)
             .Select(g => g.First())
@@ -122,26 +125,41 @@ public sealed class StripeSyncJob(
 
         // --- Ledger ingestion (append-only, idempotent by (Source, ObjectId, Type)).
         var candidates = new List<LedgerEntry>();
+
+        // Money IN comes from CHARGES — the authoritative settled-money events. This
+        // captures BOTH invoiced subscription payments AND direct one-off charges
+        // that carry no invoice (which the invoice sweep can never see). The source
+        // is tagged in SourceObjectId: an invoice id (in_…) ⇒ subscription payment,
+        // a charge id (ch_…) ⇒ a direct payment — so analytics can split the two.
+        var charges = await stripe.ListChargesAsync(now - window, ct);
+        foreach (var charge in charges)
+        {
+            if (!charge.Paid || charge.Status != "succeeded") continue;
+            var net = charge.Amount - charge.AmountRefunded; // net of refunds
+            if (net <= 0m) continue;
+            if (charge.CustomerId is null || !customerToClient.TryGetValue(charge.CustomerId, out var chargeClient)) continue;
+
+            candidates.Add(new LedgerEntry
+            {
+                ClientId = chargeClient,
+                OccurredAt = charge.Created,
+                RecordedAt = now,
+                Type = LedgerEntryType.ChargePaid,
+                SignedAmount = net, // money in → positive
+                CurrencyCode = charge.CurrencyCode,
+                SourceSystem = ExternalSystem.Stripe,
+                SourceObjectId = charge.InvoiceId ?? charge.Id, // in_… = subscription; ch_… = direct
+            });
+        }
+
+        // Failure markers stay invoice-driven (past-due / uncollectible is the
+        // eligibility signal). A ChargeFailed is a $0 event row (see below).
         foreach (var invoice in invoices)
         {
             var clientId = Resolve(invoice.SubscriptionId, invoice.CustomerId);
             if (clientId is null) continue; // unmapped money is a work-queue problem, not a ledger row
 
-            if (invoice.Status == "paid" && invoice.AmountPaid > 0)
-            {
-                candidates.Add(new LedgerEntry
-                {
-                    ClientId = clientId.Value,
-                    OccurredAt = invoice.PaidAt ?? invoice.Created,
-                    RecordedAt = now,
-                    Type = LedgerEntryType.ChargePaid,
-                    SignedAmount = invoice.AmountPaid, // money in → positive
-                    CurrencyCode = invoice.CurrencyCode,
-                    SourceSystem = ExternalSystem.Stripe,
-                    SourceObjectId = invoice.Id,
-                });
-            }
-            else if (IsFailed(invoice, now))
+            if (IsFailed(invoice, now))
             {
                 // ChargeFailed is an EVENT record: no money moved, so SignedAmount = 0.
                 // The financial effect of a failure is the ABSENCE of the ChargePaid
@@ -163,7 +181,7 @@ public sealed class StripeSyncJob(
         }
 
         await LedgerIngest.InsertIdempotentAsync(db, candidates, ct);
-        return subscriptions.Count + invoices.Count;
+        return subscriptions.Count + invoices.Count + charges.Count;
     }
 
     private static bool IsFailed(StripeInvoiceDto invoice, DateTimeOffset now) =>

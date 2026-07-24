@@ -20,7 +20,29 @@ public interface IStripeGateway
     /// </summary>
     Task<IReadOnlyList<StripeInvoiceDto>> ListInvoicesAsync(
         string? status, DateTimeOffset? createdOnOrAfter, CancellationToken ct);
+
+    /// <summary>
+    /// Paginated charge sweep from <paramref name="createdOnOrAfter"/> (created[gte]).
+    /// Charges are the authoritative money-in events — they capture BOTH invoiced
+    /// subscription payments and direct one-off charges the invoice sweep misses.
+    /// </summary>
+    Task<IReadOnlyList<StripeChargeDto>> ListChargesAsync(DateTimeOffset? createdOnOrAfter, CancellationToken ct);
 }
+
+/// <summary>
+/// A settled charge. <paramref name="InvoiceId"/> present ⇒ a subscription/invoice
+/// payment; null ⇒ a direct one-off charge. Amounts are major-unit decimals.
+/// </summary>
+public sealed record StripeChargeDto(
+    string Id,
+    string? CustomerId,
+    string? InvoiceId,
+    decimal Amount,
+    decimal AmountRefunded,
+    string CurrencyCode,
+    string Status,
+    bool Paid,
+    DateTimeOffset Created);
 
 /// <summary>
 /// A Stripe customer. NOTE: <paramref name="Name"/> is the customer/person name
@@ -151,6 +173,37 @@ public sealed class StripeGateway : IStripeGateway
         }
     }
 
+    public async Task<IReadOnlyList<StripeChargeDto>> ListChargesAsync(DateTimeOffset? createdOnOrAfter, CancellationToken ct)
+    {
+        var results = new List<StripeChargeDto>();
+        string? startingAfter = null;
+        for (var page = 0; ; page++)
+        {
+            if (page >= MaxPages) throw new InvalidOperationException("Stripe charge pagination exceeded the page cap.");
+
+            var url = $"v1/charges?limit={PageSize}";
+            if (createdOnOrAfter is { } created) url += $"&created[gte]={created.ToUnixTimeSeconds()}";
+            if (startingAfter is not null) url += $"&starting_after={Uri.EscapeDataString(startingAfter)}";
+
+            var envelope = await GetAsync<StripeListJson<ChargeJson>>(url, ct);
+            results.AddRange(envelope.Data.Where(c => c.Id.Length > 0).Select(ToDto));
+
+            if (!envelope.HasMore || envelope.Data.Count == 0) return results;
+            startingAfter = envelope.Data[^1].Id;
+        }
+    }
+
+    private static StripeChargeDto ToDto(ChargeJson c) => new(
+        c.Id,
+        string.IsNullOrEmpty(c.Customer) ? null : c.Customer,
+        string.IsNullOrEmpty(c.Invoice) ? null : c.Invoice,
+        MinorToDecimal(c.Amount) ?? 0m,
+        MinorToDecimal(c.AmountRefunded) ?? 0m,
+        (c.Currency ?? "usd").ToUpperInvariant(),
+        c.Status ?? "",
+        c.Paid,
+        DateTimeOffset.FromUnixTimeSeconds(c.Created));
+
     private async Task<T> GetAsync<T>(string relativeUrl, CancellationToken ct)
     {
         using var response = await _retry.SendAsync(
@@ -258,6 +311,19 @@ public sealed class StripeGateway : IStripeGateway
     private sealed class RecurringJson
     {
         [JsonPropertyName("interval")] public string? Interval { get; set; }
+    }
+
+    private sealed class ChargeJson
+    {
+        [JsonPropertyName("id")] public string Id { get; set; } = "";
+        [JsonPropertyName("customer")] public string? Customer { get; set; }
+        [JsonPropertyName("invoice")] public string? Invoice { get; set; }
+        [JsonPropertyName("amount")] public long? Amount { get; set; }
+        [JsonPropertyName("amount_refunded")] public long? AmountRefunded { get; set; }
+        [JsonPropertyName("currency")] public string? Currency { get; set; }
+        [JsonPropertyName("status")] public string? Status { get; set; }
+        [JsonPropertyName("paid")] public bool Paid { get; set; }
+        [JsonPropertyName("created")] public long Created { get; set; }
     }
 
     private sealed class InvoiceJson

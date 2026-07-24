@@ -30,7 +30,7 @@ public sealed class StripeSyncJobTests : IDisposable
         var options = Options.Create(new StripeOptions { ApiKey = "rk_test_dummy", BaseUrl = _server.Urls[0], ApiVersion = "2025-03-31.basil" });
         var gateway = new StripeGateway(
             new HttpClient(), options, new RetryHelper { BaseDelay = TimeSpan.FromMilliseconds(1) });
-        return new StripeSyncJob(_db.Factory, gateway, _clock, NullLogger<StripeSyncJob>.Instance);
+        return new StripeSyncJob(_db.Factory, gateway, options, _clock, NullLogger<StripeSyncJob>.Instance);
     }
 
     [Fact]
@@ -43,6 +43,7 @@ public sealed class StripeSyncJobTests : IDisposable
 
         StubSubscriptionPages();
         StubInvoices();
+        StubCharges();
 
         var job = CreateJob();
         await job.RunAsync(CancellationToken.None);
@@ -78,21 +79,26 @@ public sealed class StripeSyncJobTests : IDisposable
         paidInvoice.SubscriptionId.Should().Be("sub_1");
         invoices.Single(i => i.InvoiceId == "in_paid2").ClientId.Should().BeNull();
 
-        // --- Ledger: exactly ONE ChargePaid despite two runs (unique ingestion key).
+        // --- Money-IN comes from CHARGES: one invoiced (⇒ subscription, keyed by
+        // the invoice id) and one direct (⇒ keyed by the charge id). The unmapped
+        // customer's charge is ignored. Both survive a second run (idempotent key).
         var ledger = db.LedgerEntries.ToList();
         var paid = ledger.Where(l => l.Type == LedgerEntryType.ChargePaid).ToList();
-        paid.Should().HaveCount(1);
-        paid[0].SignedAmount.Should().Be(15.00m);
-        paid[0].SourceObjectId.Should().Be("in_paid1");
-        paid[0].ClientId.Should().Be(clientId);
-        paid[0].SourceSystem.Should().Be(ExternalSystem.Stripe);
+        paid.Should().HaveCount(2);
+        var subscriptionPaid = paid.Single(l => l.SourceObjectId == "in_paid1"); // has invoice ⇒ subscription
+        subscriptionPaid.SignedAmount.Should().Be(15.00m);
+        subscriptionPaid.ClientId.Should().Be(clientId);
+        subscriptionPaid.SourceSystem.Should().Be(ExternalSystem.Stripe);
+        var directPaid = paid.Single(l => l.SourceObjectId == "ch_direct1");      // no invoice ⇒ direct
+        directPaid.SignedAmount.Should().Be(20.00m);
+        directPaid.ClientId.Should().Be(clientId);
 
         // Open-past-due invoice → single ChargeFailed EVENT row, zero amount.
         var failed = ledger.Where(l => l.Type == LedgerEntryType.ChargeFailed).ToList();
         failed.Should().HaveCount(1);
         failed[0].SignedAmount.Should().Be(0m);
         failed[0].SourceObjectId.Should().Be("in_open1");
-        ledger.Should().HaveCount(2); // nothing for the unmapped customer's invoice
+        ledger.Should().HaveCount(3); // 2 paid + 1 failed; unmapped customer's charge ignored
 
         // --- SyncRuns: both sweeps green, complete-sweep semantics.
         var runs = db.SyncRuns.ToList();
@@ -101,7 +107,7 @@ public sealed class StripeSyncJobTests : IDisposable
             r.System == ExternalSystem.Stripe
             && r.Status == SyncRunStatus.Completed
             && r.CompletedAt != null
-            && r.ItemsSeen == 6); // 3 subscriptions + 3 invoices
+            && r.ItemsSeen == 9); // 3 subscriptions + 3 invoices + 3 charges
 
         // --- Wire-level contract: pinned version + bearer key were sent.
         var subscriptionRequests = _server.LogEntries
@@ -208,6 +214,33 @@ public sealed class StripeSyncJobTests : IDisposable
                       "created": 1784505600, "due_date": null,
                       "status_transitions": { "paid_at": 1784592000 }
                     }
+                  ]
+                }
+                """));
+    }
+
+    private void StubCharges()
+    {
+        // A succeeded invoiced charge (⇒ subscription payment, keyed by the invoice),
+        // a succeeded direct charge with no invoice (⇒ direct, keyed by the charge id),
+        // and a succeeded charge for an UNMAPPED customer (must be ignored).
+        _server.Given(Request.Create().WithPath("/v1/charges").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithBody("""
+                {
+                  "object": "list",
+                  "has_more": false,
+                  "data": [
+                    { "id": "ch_paid1", "customer": "cus_map1", "invoice": "in_paid1",
+                      "amount": 1500, "amount_refunded": 0, "currency": "cad",
+                      "status": "succeeded", "paid": true, "created": 1784592000 },
+                    { "id": "ch_direct1", "customer": "cus_map1", "invoice": null,
+                      "amount": 2000, "amount_refunded": 0, "currency": "cad",
+                      "status": "succeeded", "paid": true, "created": 1784592000 },
+                    { "id": "ch_unmapped", "customer": "cus_unmapped", "invoice": null,
+                      "amount": 5000, "amount_refunded": 0, "currency": "usd",
+                      "status": "succeeded", "paid": true, "created": 1784592000 }
                   ]
                 }
                 """));

@@ -55,7 +55,7 @@ public sealed class SyncRunPartialFailureTests : IDisposable
         var options = Options.Create(new StripeOptions { ApiKey = "rk_test_dummy", BaseUrl = _server.Urls[0] });
         var gateway = new StripeGateway(
             new HttpClient(), options, new RetryHelper { BaseDelay = TimeSpan.FromMilliseconds(1) });
-        var job = new StripeSyncJob(_db.Factory, gateway, _clock, NullLogger<StripeSyncJob>.Instance);
+        var job = new StripeSyncJob(_db.Factory, gateway, options, _clock, NullLogger<StripeSyncJob>.Instance);
 
         // Must not throw — failures are recorded, not propagated.
         await job.RunAsync(CancellationToken.None);
