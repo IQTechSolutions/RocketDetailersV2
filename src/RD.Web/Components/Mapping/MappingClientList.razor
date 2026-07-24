@@ -1,0 +1,70 @@
+@using RD.Domain
+@* Left rail of the wizard: master-account clients that still need mapping, each with gap chips. Pure-rendered from Rows — no data loading, so it unit-tests directly. *@
+
+<MudPaper Elevation="1" Class="pa-3" Style="height:100%;">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+        <MudText Typo="Typo.h6">Needs mapping</MudText>
+        <HelpHint Text="Master-account clients whose four required links aren't all present and verified. Fixing a client here unlocks its climb from Shadow to Assist. Clients with open reconciliation items float to the top." />
+    </MudStack>
+
+    @if (Rows.Count == 0)
+    {
+        <EmptyState Icon="@Icons.Material.Filled.Verified"
+                    Title="Every master-account client is mapped and verified 🎉"
+                    Hint="Nothing needs mapping right now. New gaps appear here the moment a required link breaks or a client is imported." />
+    }
+    else
+    {
+        <MudStack Spacing="2">
+            @foreach (var row in Rows)
+            {
+                var selected = row.Id == SelectedId;
+                <MudPaper Outlined="true" Class="pa-3 rd-mapping-client" Elevation="0"
+                          Style="@(selected ? "cursor:pointer;border-color:var(--mud-palette-primary);border-width:2px;" : "cursor:pointer;")"
+                          @onclick="@(() => OnSelect.InvokeAsync(row.Id))">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+                        <MudText Typo="Typo.subtitle2" Style="flex:1;">@row.BusinessName</MudText>
+                        <ModeBadge Mode="@row.Mode" />
+                    </MudStack>
+
+                    <div>
+                        <PresenceChip Label="Stripe cus" Present="@row.HasStripeCustomer" />
+                        <PresenceChip Label="Stripe sub" Present="@row.HasStripeSubscription" />
+                        <PresenceChip Label="Meta" Present="@row.HasMetaCampaign" />
+                        <PresenceChip Label="GHL" Present="@row.HasGhlContact" />
+                    </div>
+
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-1" Wrap="Wrap.Wrap">
+                        @if (row.OpenPriorityInvestigations > 0)
+                        {
+                            <MudTooltip Arrow="true" Text="Open reconciliation items (unmapped identity, import conflict, or duplicate Stripe customer) — fix these first.">
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning"
+                                         Icon="@Icons.Material.Filled.PriorityHigh">
+                                    @row.OpenPriorityInvestigations to reconcile
+                                </MudChip>
+                            </MudTooltip>
+                        }
+                        @if (row.RequiredLinksComplete && !row.HasCurrentVerification)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info">
+                                Links complete — needs verify
+                            </MudChip>
+                        }
+                        else if (!row.RequiredLinksComplete)
+                        {
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                Missing: @string.Join(", ", row.MissingLinks)
+                            </MudText>
+                        }
+                    </MudStack>
+                </MudPaper>
+            }
+        </MudStack>
+    }
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<UnverifiedClientRow> Rows { get; set; } = [];
+    [Parameter] public Guid? SelectedId { get; set; }
+    [Parameter] public EventCallback<Guid> OnSelect { get; set; }
+}
