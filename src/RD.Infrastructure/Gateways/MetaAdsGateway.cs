@@ -125,8 +125,13 @@ public sealed class MetaAdsGateway : IMetaAdsGateway
 
     public async Task<IReadOnlyList<MetaCampaignDto>> ListCampaignsAsync(string adAccountId, CancellationToken ct)
     {
+        // The campaigns edge EXCLUDES archived campaigns by default. Master-account
+        // campaigns that had been archived were therefore missing from the sweep,
+        // wrongly flagging their (still real) clients as "not in the master account".
+        // Ask for every non-deleted effective_status explicitly.
+        var statusFilter = Uri.EscapeDataString("[\"ACTIVE\",\"PAUSED\",\"ARCHIVED\",\"IN_PROCESS\",\"WITH_ISSUES\"]");
         var baseUrl = $"{NormalizeActId(adAccountId)}/campaigns" +
-                      $"?fields=name,status,effective_status,daily_budget,updated_time&limit={PageSize}";
+                      $"?fields=name,status,effective_status,daily_budget,updated_time&effective_status={statusFilter}&limit={PageSize}";
 
         var rows = await SweepAsync<CampaignJson>(baseUrl, ct);
         return rows

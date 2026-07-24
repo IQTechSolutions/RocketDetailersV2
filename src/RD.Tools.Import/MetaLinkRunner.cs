@@ -110,12 +110,20 @@ public static class MetaLinkRunner
                      .Select(l => new { l.ClientId, l.ExternalId }).ToListAsync(ct))
             campaignOwner[l.ExternalId] = l.ClientId;
 
+        // Open flags already on file — so a re-run doesn't duplicate identical items.
+        var existingFlags = (await db.InvestigationItems.AsNoTracking()
+                .Where(i => i.Status == InvestigationStatus.Open)
+                .Select(i => new { i.ClientId, i.Kind, i.Detail })
+                .ToListAsync(ct))
+            .Select(i => (i.ClientId, i.Kind, i.Detail)).ToHashSet();
+
         var now = DateTimeOffset.UtcNow;
         int linked = 0, clientsLinked = 0, clientsNoMapping = 0, staleNotFound = 0, conflicts = 0, alreadyLinked = 0, flags = 0;
 
         void Flag(Guid? clientId, InvestigationKind kind, string detail)
         {
             if (detail.Length > 1000) detail = detail[..997] + "...";
+            if (!existingFlags.Add((clientId, kind, detail))) return; // identical open flag already present
             db.InvestigationItems.Add(new InvestigationItem
             {
                 Id = Guid.NewGuid(), ClientId = clientId, Kind = kind, Detail = detail, CreatedAt = now,
