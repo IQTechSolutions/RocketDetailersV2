@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 Format: `## [MAJOR.MINOR.PATCH.MICRO] - YYYY-MM-DD` with Added / Changed / Fixed / Removed sections.
 
+## [0.0.0.5] - 2026-07-24
+
+### Added
+
+- Owner analytics dashboard: a single view of the money that matters — net cash position (receivables collected vs. ad spend), per-client exposure, and package revenue — so the owner can see at a glance whether the book is net-positive and where the risk sits.
+- Auto-mode promotion ladder: clients climb Shadow → Assist → Auto only after a required run of clean days *and* at least one enforcement path exercised end-to-end, gated so a client is never promoted to unattended enforcement without a proven track record.
+
 ## [0.0.0.4] - 2026-07-24
 
 ### Fixed
