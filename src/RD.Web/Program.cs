@@ -8,6 +8,7 @@ using MudBlazor.Services;
 using RD.Domain;
 using RD.Infrastructure;
 using RD.Infrastructure.Enforcement;
+using RD.Infrastructure.Slack;
 using RD.Infrastructure.Sync;
 using RD.Infrastructure.Webhooks;
 using RD.Web.Components;
@@ -66,6 +67,9 @@ builder.Services.AddRdSync(builder.Configuration);
 // Stripe webhook receiver (signature verify + recoverable inbox).
 builder.Services.AddStripeWebhooks(builder.Configuration);
 
+// Slack interactive approve/dismiss (signed callbacks + Slack→Operator mapping).
+builder.Services.AddSlack(builder.Configuration);
+
 // Hangfire: same SQL Server database, own schema; recurring jobs only — the
 // outbox dispatcher (M2) is the pump for external writes, never fire-and-forget.
 var connectionString = builder.Configuration.GetConnectionString("RocketDetailers");
@@ -99,6 +103,9 @@ app.MapRazorComponents<App>()
 // Signature is verified over the raw body, so this endpoint reads bytes directly.
 app.MapStripeWebhook();
 
+// Slack interactivity callback — signed, maps the Slack user to an Operator before acting.
+app.MapSlackInteractivity();
+
 // Dashboard: Operators/Admins only.
 app.MapHangfireDashboard("/hangfire", new DashboardOptions { Authorization = [new HangfireOperatorFilter()] });
 
@@ -120,8 +127,12 @@ recurring.AddOrUpdate<PolicyEvaluationJob>("policy-evaluation", j => j.RunAsync(
 // dispatch) and doubly guarded by the safety profile (TestMode + canary-only).
 recurring.AddOrUpdate<OutboxDispatcher>("outbox-dispatch", d => d.RunAsync(CancellationToken.None), "* * * * *");
 recurring.AddOrUpdate<GhlDeliveryVerificationJob>("ghl-delivery-verify", j => j.RunAsync(CancellationToken.None), "*/5 * * * *");
+if (!string.IsNullOrEmpty(builder.Configuration["Slack:IncomingWebhookUrl"]))
+    recurring.AddOrUpdate<SlackNotificationJob>("slack-notify", j => j.RunAsync(CancellationToken.None), "* * * * *");
 
-// Ensure roles + the seed user exist so the app is usable on first run.
+// Ensure roles + the seed user exist so the app is usable on first run,
+// then link the mapped Slack users onto their internal accounts.
 await IdentitySeeder.SeedAsync(app.Services);
+await SlackUserSeeder.SeedAsync(app.Services);
 
 app.Run();
