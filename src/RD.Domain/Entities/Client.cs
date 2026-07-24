@@ -15,6 +15,14 @@ public class Client
     public EnforcementMode EnforcementMode { get; set; } = EnforcementMode.Shadow;
     public Guid? PackageId { get; set; }
     public Package? Package { get; set; }
+
+    // Payment arrangement — the yardstick the balance policy measures against.
+    // Inferred from the client's payment cadence; low-confidence inferences are
+    // flagged for a human (ArrangementStatus.NeedsReview) rather than trusted.
+    public decimal? ExpectedAmount { get; set; }
+    public int? CadenceDays { get; set; }
+    public ArrangementStatus ArrangementStatus { get; set; } = ArrangementStatus.Unknown;
+
     public string? Notes { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public byte[] RowVersion { get; set; } = [];

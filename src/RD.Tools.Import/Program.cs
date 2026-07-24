@@ -29,6 +29,10 @@ if (args.Length > 0 && args[0].Equals("link-ghl", StringComparison.OrdinalIgnore
 if (args.Length > 0 && args[0].Equals("mark-master", StringComparison.OrdinalIgnoreCase))
     return await MarkMasterRunner.RunAsync(args);
 
+// "infer-arrangements" verb: infer each client's payment cadence/amount from history (see ArrangementInferenceRunner).
+if (args.Length > 0 && args[0].Equals("infer-arrangements", StringComparison.OrdinalIgnoreCase))
+    return await ArrangementInferenceRunner.RunAsync(args);
+
 // Seed importer: one-time load of the reconciliation spreadsheet into SQL.
 // Disposable by design (design doc: "one-time spreadsheet import code").
 // Usage: dotnet run --project src/RD.Tools.Import -- "<xlsx path>" [--conn "<connection string>"] [--force]
@@ -124,6 +128,7 @@ for (var r = 5; r <= lastRow; r++)
             {
                 Id = Guid.NewGuid(), ClientId = client.Id, Kind = InvestigationKind.ImportConflict,
                 Detail = $"{system}/{kind} '{externalId}' already linked to another client (spreadsheet row {r}).",
+                System = system, ExternalId = externalId,
                 CreatedAt = now,
             });
             investigations++;
@@ -153,6 +158,7 @@ for (var r = 5; r <= lastRow; r++)
         {
             Id = Guid.NewGuid(), ClientId = client.Id, Kind = InvestigationKind.DuplicateStripeCustomer,
             Detail = $"Second Stripe identity in spreadsheet: customer='{cus2}', subscription='{sub2}'. Merge or invalidate.",
+            System = ExternalSystem.Stripe, ExternalId = string.IsNullOrWhiteSpace(cus2) ? null : cus2,
             CreatedAt = now,
         });
         investigations++;

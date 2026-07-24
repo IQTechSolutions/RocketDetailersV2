@@ -46,6 +46,10 @@ public class InvestigationItem
     public Guid? ClientId { get; set; }
     public InvestigationKind Kind { get; set; }
     public required string Detail { get; set; }
+    /// <summary>The external system this item concerns (Stripe/Meta/GHL/ClickUp), when it points at a specific vendor identity. Null for engine-internal items.</summary>
+    public ExternalSystem? System { get; set; }
+    /// <summary>The external id the operator needs to double-check (cus_/sub_/campaign/contact/task), when known. Enables a direct vendor deep-link instead of parsing <see cref="Detail"/>.</summary>
+    public string? ExternalId { get; set; }
     public InvestigationStatus Status { get; set; } = InvestigationStatus.Open;
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? ResolvedAt { get; set; }

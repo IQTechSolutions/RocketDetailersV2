@@ -61,7 +61,13 @@ public enum InvestigationKind
     UnmappedIdentity = 0, DuplicateStripeCustomer = 1, ExternallyPausedPayment = 2,
     CanceledSubPayment = 3, NonUsdCurrency = 4, MissingTrialExpiry = 5,
     StaleSync = 6, DeliveryUnverified = 7, ExposureCapExceeded = 8,
-    SpendAnomaly = 9, ImportConflict = 10, Other = 99
+    SpendAnomaly = 9, ImportConflict = 10, PaymentArrangementUnclear = 11, Other = 99
 }
+
+/// <summary>
+/// State of a client's payment arrangement (expected amount + cadence).
+/// Inferred where the payment history is regular enough; otherwise a human confirms.
+/// </summary>
+public enum ArrangementStatus { Unknown = 0, Inferred = 1, NeedsReview = 2, Confirmed = 3 }
 
 public enum TrialOutcome { Active = 0, Promoted = 1, Expired = 2, Extended = 3 }
