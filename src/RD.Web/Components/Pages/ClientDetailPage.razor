@@ -112,6 +112,10 @@ else
                 <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
                     <MudText Typo="Typo.h6">Identity links</MudText>
                     <HelpHint Text="How this client is known in each external system. A link must be active (not invalidated) for the engine to use it; verification pins it for enforcement." />
+                    <MudSpacer />
+                    <AddGhlContactButton ClientId="@c.Id" Email="@c.Email" Name="@c.BusinessName"
+                                         Show="@(!_detail.Links.Any(l => l.System == ExternalSystem.Ghl && l.Kind == LinkKind.Contact))"
+                                         OnCreated="ReloadAsync" />
                 </MudStack>
                 @if (_detail.Links.Count == 0)
                 {

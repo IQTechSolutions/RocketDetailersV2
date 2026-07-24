@@ -41,6 +41,9 @@
                         <PresenceChip Label="Stripe" Present="@context.Item.HasStripe" />
                         <PresenceChip Label="Meta" Present="@context.Item.HasMeta" />
                         <PresenceChip Label="GHL" Present="@context.Item.HasGhl" />
+                        <AddGhlContactButton ClientId="@context.Item.ClientId" Name="@context.Item.ClientName"
+                                             Show="@(!context.Item.HasGhl)" IconOnly="true"
+                                             OnCreated="ReloadAsync" />
                     </CellTemplate>
                 </TemplateColumn>
                 <TemplateColumn Title="Mode">
@@ -96,6 +99,9 @@
     private List<ActionQueueRow>? _rows;
 
     protected override async Task OnInitializedAsync()
+        => _rows = await Actions.GetOpenQueueAsync();
+
+    private async Task ReloadAsync()
         => _rows = await Actions.GetOpenQueueAsync();
 
     private async Task ConfirmAsync(ActionQueueRow row, bool approve)

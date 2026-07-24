@@ -1,0 +1,56 @@
+@* Reusable admin action: create + link a GHL contact for a client that has none.
+   Renders nothing unless Show is true and the user is an Operator. Drop it into any
+   view that surfaces a client. *@
+@using RD.Web.Components.Dialogs
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject GhlContactAdminService GhlContacts
+
+@if (Show)
+{
+    <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
+        <MudTooltip Arrow="true" Text="Create a GoHighLevel contact for this client and link it (choose the location)">
+            @if (IconOnly)
+            {
+                <MudIconButton Icon="@Icons.Material.Filled.PersonAdd" Size="@Size" Color="Color.Primary"
+                               OnClick="OpenAsync" aria-label="Add GHL contact" />
+            }
+            else
+            {
+                <MudButton Size="@Size" Variant="Variant.Outlined" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.PersonAdd" OnClick="OpenAsync">@Label</MudButton>
+            }
+        </MudTooltip>
+    </AuthorizeView>
+}
+
+@code {
+    [Parameter, EditorRequired] public Guid ClientId { get; set; }
+    [Parameter] public string? Email { get; set; }
+    [Parameter] public string? Name { get; set; }
+
+    /// <summary>Hide the button (e.g. the client already has a GHL contact). Default shows it; the service guards duplicates anyway.</summary>
+    [Parameter] public bool Show { get; set; } = true;
+    [Parameter] public bool IconOnly { get; set; }
+    [Parameter] public Size Size { get; set; } = Size.Small;
+    [Parameter] public string Label { get; set; } = "Add GHL contact";
+
+    /// <summary>Invoked after a successful create+link, so the host can refresh.</summary>
+    [Parameter] public EventCallback OnCreated { get; set; }
+
+    private async Task OpenAsync()
+    {
+        var parameters = new DialogParameters<CreateGhlContactDialog>
+        {
+            { d => d.Email, Email },
+            { d => d.Name, Name },
+        };
+        var dialog = await Dialogs.ShowAsync<CreateGhlContactDialog>(null, parameters);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not string locationId) return;
+
+        var write = await GhlContacts.CreateAndLinkAsync(ClientId, locationId);
+        Snackbar.Add(write.Message, write.Ok ? Severity.Success : Severity.Warning);
+        if (write.Ok) await OnCreated.InvokeAsync();
+    }
+}

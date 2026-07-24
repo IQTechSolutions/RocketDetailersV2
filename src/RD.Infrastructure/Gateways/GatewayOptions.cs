@@ -36,8 +36,10 @@ public sealed class MetaOptions
 public sealed class GhlLocationOptions
 {
     public string LocationId { get; set; } = "";
-    /// <summary>Per-location Private Integration Token. Exactly 2 locations exist in production.</summary>
+    /// <summary>Per-location Private Integration Token.</summary>
     public string Token { get; set; } = "";
+    /// <summary>Optional friendly label for the location (shown in the admin's create-contact picker); falls back to the id.</summary>
+    public string? Name { get; set; }
 }
 
 public sealed class GhlOptions

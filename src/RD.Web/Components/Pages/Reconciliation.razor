@@ -72,6 +72,9 @@
                                     → Fix mapping
                                 </MudLink>
                             }
+                            @* A client with no GHL contact can be given one straight from the queue. *@
+                            <AddGhlContactButton ClientId="@context.Item.ClientId.Value" Name="@context.Item.ClientName"
+                                                 IconOnly="true" OnCreated="LoadAsync" />
                         }
                         else
                         {
