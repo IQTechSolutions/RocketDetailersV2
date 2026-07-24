@@ -15,6 +15,8 @@ public sealed class StripeOptions
     public string BaseUrl { get; set; } = "https://api.stripe.com";
     /// <summary>Optional Stripe-Version pin. Empty = account default version. Set after M0 confirms the account's version.</summary>
     public string ApiVersion { get; set; } = "";
+    /// <summary>How many days back the ledger sweep covers non-open invoices + charges. Small for the recurring job; raise for a one-off full-history backfill.</summary>
+    public int LedgerLookbackDays { get; set; } = 30;
 }
 
 public sealed class MetaOptions
