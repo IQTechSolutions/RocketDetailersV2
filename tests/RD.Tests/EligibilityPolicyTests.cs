@@ -348,4 +348,50 @@ public class EligibilityPolicyTests
         var replayed = System.Text.Json.JsonSerializer.Deserialize<ClientState>(json)!;
         EligibilityPolicy.Evaluate(replayed).Should().BeEquivalentTo(EligibilityPolicy.Evaluate(s));
     }
+
+    // ── Step 3: arrangement balance (payments must cover master-account ad spend) ──
+
+    private static ClientState WithArrangement(decimal paid, decimal adSpend, decimal expected,
+        ArrangementStatus status = ArrangementStatus.Inferred) => Base() with
+    {
+        TotalPaid = paid,
+        TotalAdSpend = adSpend,
+        ArrangementAmount = expected,
+        ArrangementStatus = status,
+    };
+
+    [Fact]
+    public void Behind_more_than_one_payment_pauses()
+    {
+        // paid 100 vs ad spend 500 → balance −400, more than one 200 payment short.
+        var d = EligibilityPolicy.Evaluate(WithArrangement(paid: 100m, adSpend: 500m, expected: 200m));
+        d.Action.Should().Be(ProposedActionType.Pause);
+        d.Reason.Should().Contain("Behind on arrangement");
+        d.TargetCampaignIds.Should().Contain("c1");
+    }
+
+    [Fact]
+    public void In_the_green_does_not_pause_on_the_balance_rule()
+    {
+        // paid 500 vs ad spend 400 → balance +100 → falls through to normal handling.
+        var d = EligibilityPolicy.Evaluate(WithArrangement(paid: 500m, adSpend: 400m, expected: 200m));
+        d.Action.Should().NotBe(ProposedActionType.Pause);
+    }
+
+    [Fact]
+    public void Behind_by_less_than_one_payment_is_within_grace()
+    {
+        // paid 400 vs ad spend 500 → balance −100, not past the 200 grace.
+        var d = EligibilityPolicy.Evaluate(WithArrangement(paid: 400m, adSpend: 500m, expected: 200m));
+        d.Action.Should().NotBe(ProposedActionType.Pause);
+    }
+
+    [Fact]
+    public void Unknown_arrangement_never_triggers_the_balance_rule()
+    {
+        // Deeply underwater, but no established arrangement → defer to Stripe/dunning signals.
+        var d = EligibilityPolicy.Evaluate(WithArrangement(paid: 0m, adSpend: 900m, expected: 200m,
+            status: ArrangementStatus.NeedsReview));
+        d.Reason.Should().NotContain("Behind on arrangement");
+    }
 }
