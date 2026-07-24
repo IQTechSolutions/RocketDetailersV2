@@ -31,6 +31,10 @@ dotnet test RocketDetailers.slnx
 
 Configuration (connection strings, provider API keys) is supplied via user secrets or environment variables — never committed to the repo.
 
+### Versioning
+
+The repo-root `VERSION` file (`MAJOR.MINOR.PATCH.MICRO`) is the single source of truth for assembly versions. `Directory.Build.props` reads it into every project's `VersionPrefix`, `AssemblyVersion`, and `FileVersion`; `Directory.Build.targets` fails the build if the file is missing or malformed. Bump it via the ship workflow rather than editing project files.
+
 ## Documentation
 
 - [Design doc](docs/designs/rocket-detailer-control-plane.md) — vision, scope decisions, and milestone plan for the control plane
