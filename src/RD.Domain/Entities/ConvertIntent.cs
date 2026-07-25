@@ -60,6 +60,14 @@ public class ConvertIntent
     /// <summary>The staged Stripe action (A1 draft), serialized. Null in the A0 shell.</summary>
     public string? DraftedActionJson { get; set; }
 
+    /// <summary>
+    /// Shadow record for the (spike-gated) `close` GHL tag write: the client's GHL contact resolved at
+    /// first-payment promotion. Captures the write target so the live write knows where to write and
+    /// resolution can be validated against real conversions before anything fires. Null if the client
+    /// has no linked GHL contact.
+    /// </summary>
+    public string? CloseTagContactId { get; set; }
+
     /// <summary>ASP.NET Identity user id of the closer who clicked Convert.</summary>
     public string? CreatedByUserId { get; set; }
 

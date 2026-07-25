@@ -304,6 +304,15 @@ public sealed class StripeWebhookIngestor(
             .FirstOrDefaultAsync(ct);
         if (trial is not null)
             trial.Outcome = TrialOutcome.Promoted;
+
+        // Shadow record for the (spike-gated) `close` tag write: resolve the client's GHL contact now.
+        // No GHL call — this just captures the write target so the live write, when enabled, knows where
+        // to write, and contact resolution is validated against real conversions before anything fires.
+        intent.CloseTagContactId = await db.IdentityLinks
+            .Where(l => l.ClientId == intent.ClientId && l.System == ExternalSystem.Ghl
+                        && l.Kind == LinkKind.Contact && l.InvalidatedAt == null)
+            .Select(l => l.ExternalId)
+            .FirstOrDefaultAsync(ct);
     }
 
     private async Task<string> ProcessSubscriptionAsync(

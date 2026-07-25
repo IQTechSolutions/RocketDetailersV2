@@ -38,6 +38,20 @@ public interface IGhlGateway
     /// it does not message anyone).
     /// </summary>
     Task<string> CreateContactAsync(string locationId, string token, string? email, string name, CancellationToken ct);
+
+    /// <summary>
+    /// A contact's current tags. Read-only (no TestMode gate) — this is the read-before-write check for
+    /// the `close` tag write: GHL doesn't guarantee re-adding an existing tag is a no-op, so a write must
+    /// skip when the tag is already present or risk double-firing the tag's workflows.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetContactTagsAsync(string locationId, string contactId, CancellationToken ct);
+
+    /// <summary>
+    /// Add a tag to a contact (POST /contacts/{id}/tags). A WRITE that detonates whatever GHL workflows
+    /// trigger on that tag — TestMode redirects it to the test contact so it can never fire a real client's
+    /// chain. Callers MUST read-before-write (see <see cref="GetContactTagsAsync"/>).
+    /// </summary>
+    Task<GhlWriteResult> AddContactTagAsync(string locationId, string contactId, string tag, CancellationToken ct);
 }
 
 /// <summary>Records where the write ACTUALLY landed — under TestMode that is the test contact, not the intended recipient. The audit must show the redirect.</summary>
@@ -109,6 +123,36 @@ public sealed class GhlGateway : IGhlGateway
             HttpMethod.Post,
             $"contacts/{Uri.EscapeDataString(effContact)}/workflow/{Uri.EscapeDataString(workflowId)}",
             token, "{}");
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureWriteSucceededAsync(response, ct);
+        return new GhlWriteResult(redirected, effLocation, effContact);
+    }
+
+    public async Task<IReadOnlyList<string>> GetContactTagsAsync(string locationId, string contactId, CancellationToken ct)
+    {
+        var token = TokenFor(locationId);
+        using var response = await _retry.SendAsync(
+            _http, () => BuildRequest($"contacts/{Uri.EscapeDataString(contactId)}", token), ct);
+        using var doc = await GatewayHttp.ReadDocumentAsync(response, ct);
+
+        // { contact: { tags: [...] } } is the documented shape; tolerate a flattened { tags: [...] }.
+        var root = doc.RootElement;
+        var contact = root.TryGetProperty("contact", out var c) && c.ValueKind == JsonValueKind.Object ? c : root;
+        if (!contact.TryGetProperty("tags", out var tags) || tags.ValueKind != JsonValueKind.Array) return [];
+        return tags.EnumerateArray()
+            .Where(t => t.ValueKind == JsonValueKind.String)
+            .Select(t => t.GetString()!)
+            .ToList();
+    }
+
+    public async Task<GhlWriteResult> AddContactTagAsync(string locationId, string contactId, string tag, CancellationToken ct)
+    {
+        var (effLocation, effContact, redirected) = ResolveTarget(locationId, contactId);
+        var token = TokenFor(effLocation);
+        var payload = JsonSerializer.Serialize(new { tags = new[] { tag } });
+
+        using var request = BuildJsonRequest(
+            HttpMethod.Post, $"contacts/{Uri.EscapeDataString(effContact)}/tags", token, payload);
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         await EnsureWriteSucceededAsync(response, ct);
         return new GhlWriteResult(redirected, effLocation, effContact);

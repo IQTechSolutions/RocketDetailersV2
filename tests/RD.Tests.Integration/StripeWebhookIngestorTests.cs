@@ -245,7 +245,8 @@ public sealed class StripeWebhookIngestorTests : IDisposable
     {
         var clientId = _db.SeedClientWithLink(
             ExternalSystem.Stripe, LinkKind.Customer, "cus_1",
-            (ExternalSystem.Stripe, LinkKind.Subscription, "sub_1"));
+            (ExternalSystem.Stripe, LinkKind.Subscription, "sub_1"),
+            (ExternalSystem.Ghl, LinkKind.Contact, "ghl_c1"));
 
         Guid intentId;
         using (var seed = _db.CreateContext())
@@ -270,7 +271,9 @@ public sealed class StripeWebhookIngestorTests : IDisposable
         result.Should().Be(WebhookIngestResult.Processed);
 
         await using var db = _db.CreateContext();
-        db.ConvertIntents.Single(i => i.Id == intentId).State.Should().Be(ConvertIntentState.Paid);
+        var promoted = db.ConvertIntents.Single(i => i.Id == intentId);
+        promoted.State.Should().Be(ConvertIntentState.Paid);
+        promoted.CloseTagContactId.Should().Be("ghl_c1"); // Shadow record of the close-write target
         db.TrialPeriods.Single(t => t.ClientId == clientId).Outcome.Should().Be(TrialOutcome.Promoted);
     }
 
