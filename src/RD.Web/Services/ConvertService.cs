@@ -21,7 +21,7 @@ public sealed record ActiveConvertDraft(Guid IntentId, ConvertIntentState State,
 /// <see cref="ConvertIntent"/> in <see cref="ConvertIntentState.Drafted"/> and write the
 /// chosen account type through to <see cref="Client.AccountType"/> explicitly.
 ///
-/// The billing draft (A1), Stripe execution + `closed` write (B), and Auto promotion (C)
+/// The billing draft (A1), Stripe execution + `close` GHL tag write (B), and Auto promotion (C)
 /// are NOT here. This never touches Stripe or GHL.
 /// </summary>
 public class ConvertService(IDbContextFactory<RdDbContext> factory, IClock clock)

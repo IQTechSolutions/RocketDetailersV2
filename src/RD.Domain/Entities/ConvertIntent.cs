@@ -19,7 +19,7 @@ namespace RD.Domain.Entities;
 ///      └── never billed without a human clicking Convert
 ///
 /// A0 (this shell) only ever creates the record in Drafted. The draft/branch logic
-/// (A1), Stripe execution + `closed` write (B), and Auto promotion (C) come later.
+/// (A1), Stripe execution + `close` GHL tag write (B), and Auto promotion (C) come later.
 /// </summary>
 public class ConvertIntent
 {

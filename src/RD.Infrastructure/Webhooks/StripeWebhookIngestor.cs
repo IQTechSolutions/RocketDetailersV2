@@ -282,7 +282,7 @@ public sealed class StripeWebhookIngestor(
     /// <summary>
     /// First-payment promotion: move the conversion AwaitingPayment → Paid and its client's active trial
     /// Active → Promoted, so EligibilityPolicy stops suppressing enforcement (rule 4) with no drift window.
-    /// Runs in the caller's transaction. (The `closed` GHL tag write is a later, spike-gated step.)
+    /// Runs in the caller's transaction. (The `close` GHL tag write is a later, spike-gated step.)
     /// </summary>
     private static async Task PromoteConversionAsync(RdDbContext db, string? subscriptionId, DateTimeOffset now, CancellationToken ct)
     {
