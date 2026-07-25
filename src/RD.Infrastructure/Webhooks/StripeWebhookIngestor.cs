@@ -269,9 +269,38 @@ public sealed class StripeWebhookIngestor(
                 SourceObjectId = invoiceId,
             };
             await LedgerIngest.InsertIdempotentAsync(db, new[] { entry }, ct);
+
+            // Convert→Bill→Close (rung B): the first payment for a conversion's subscription promotes it.
+            // Correlates on the subscription id stamped at billing-execute. Idempotent: the AwaitingPayment
+            // guard means a redelivery / poison-replay / renewal invoice never re-promotes (state has moved on).
+            await PromoteConversionAsync(db, subscriptionId, now, ct);
         }
 
         return invoiceId;
+    }
+
+    /// <summary>
+    /// First-payment promotion: move the conversion AwaitingPayment → Paid and its client's active trial
+    /// Active → Promoted, so EligibilityPolicy stops suppressing enforcement (rule 4) with no drift window.
+    /// Runs in the caller's transaction. (The `closed` GHL tag write is a later, spike-gated step.)
+    /// </summary>
+    private static async Task PromoteConversionAsync(RdDbContext db, string? subscriptionId, DateTimeOffset now, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(subscriptionId)) return;
+
+        var intent = await db.ConvertIntents.FirstOrDefaultAsync(
+            i => i.StripeSubscriptionId == subscriptionId && i.State == ConvertIntentState.AwaitingPayment, ct);
+        if (intent is null) return;
+
+        intent.State = ConvertIntentState.Paid;
+        intent.UpdatedAt = now;
+
+        var trial = await db.TrialPeriods
+            .Where(t => t.ClientId == intent.ClientId && t.Outcome == TrialOutcome.Active)
+            .OrderByDescending(t => t.StartsAt)
+            .FirstOrDefaultAsync(ct);
+        if (trial is not null)
+            trial.Outcome = TrialOutcome.Promoted;
     }
 
     private async Task<string> ProcessSubscriptionAsync(

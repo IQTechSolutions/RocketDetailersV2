@@ -80,6 +80,7 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
             e.Property(x => x.AccountType).HasConversion<string>().HasMaxLength(10);
             e.Property(x => x.State).HasConversion<string>().HasMaxLength(20);
             e.Property(x => x.StripeCustomerId).HasMaxLength(100);
+            e.Property(x => x.StripeSubscriptionId).HasMaxLength(100);
             e.Property(x => x.CreatedByUserId).HasMaxLength(450); // AspNet Identity key length
             e.Property(x => x.RowVersion).IsRowVersion();
             e.HasOne(x => x.Client).WithMany().HasForeignKey(x => x.ClientId).OnDelete(DeleteBehavior.Restrict);

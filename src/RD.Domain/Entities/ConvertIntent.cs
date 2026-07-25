@@ -49,6 +49,12 @@ public class ConvertIntent
     /// </summary>
     public string? StripeCustomerId { get; set; }
 
+    /// <summary>
+    /// The Stripe subscription created at billing-execute (rung B). Null until executed; it's how the
+    /// first-payment webhook correlates a paid invoice back to THIS conversion.
+    /// </summary>
+    public string? StripeSubscriptionId { get; set; }
+
     public ConvertIntentState State { get; set; } = ConvertIntentState.Drafted;
 
     /// <summary>The staged Stripe action (A1 draft), serialized. Null in the A0 shell.</summary>

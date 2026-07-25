@@ -74,6 +74,7 @@ public class ConvertBillingService(
         // 3. Move the intent to AwaitingPayment. RowVersion guards a concurrent execute.
         intent.State = ConvertIntentState.AwaitingPayment;
         intent.StripeCustomerId = customerId;
+        intent.StripeSubscriptionId = sub.Id; // the first-payment webhook correlates on this
         intent.ExpiresAt = now + AwaitingPaymentWindow;
         intent.UpdatedAt = now;
 

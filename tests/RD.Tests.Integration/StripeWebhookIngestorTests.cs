@@ -240,6 +240,69 @@ public sealed class StripeWebhookIngestorTests : IDisposable
         """;
     }
 
+    [Fact]
+    public async Task InvoicePaid_PromotesMatchingConversion_AndTrial()
+    {
+        var clientId = _db.SeedClientWithLink(
+            ExternalSystem.Stripe, LinkKind.Customer, "cus_1",
+            (ExternalSystem.Stripe, LinkKind.Subscription, "sub_1"));
+
+        Guid intentId;
+        using (var seed = _db.CreateContext())
+        {
+            var intent = new ConvertIntent
+            {
+                Id = Guid.NewGuid(), ClientId = clientId, AccountType = AccountType.Own,
+                State = ConvertIntentState.AwaitingPayment, StripeSubscriptionId = "sub_1",
+                CreatedAt = _clock.UtcNow, UpdatedAt = _clock.UtcNow,
+            };
+            intentId = intent.Id;
+            seed.ConvertIntents.Add(intent);
+            seed.TrialPeriods.Add(new TrialPeriod
+            {
+                Id = Guid.NewGuid(), ClientId = clientId, StartsAt = _clock.UtcNow.AddDays(-3), Outcome = TrialOutcome.Active,
+            });
+            seed.SaveChanges();
+        }
+
+        var payload = InvoicePaidEvent("evt_p", "in_p", "cus_1", "sub_1", amountPaid: 9900);
+        var result = await CreateIngestor().IngestAsync("evt_p", "invoice.paid", payload, CancellationToken.None);
+        result.Should().Be(WebhookIngestResult.Processed);
+
+        await using var db = _db.CreateContext();
+        db.ConvertIntents.Single(i => i.Id == intentId).State.Should().Be(ConvertIntentState.Paid);
+        db.TrialPeriods.Single(t => t.ClientId == clientId).Outcome.Should().Be(TrialOutcome.Promoted);
+    }
+
+    [Fact]
+    public async Task InvoicePaid_DoesNotRepromote_AnAlreadyPaidConversion()
+    {
+        var clientId = _db.SeedClientWithLink(
+            ExternalSystem.Stripe, LinkKind.Customer, "cus_1",
+            (ExternalSystem.Stripe, LinkKind.Subscription, "sub_1"));
+
+        Guid intentId;
+        using (var seed = _db.CreateContext())
+        {
+            var intent = new ConvertIntent
+            {
+                Id = Guid.NewGuid(), ClientId = clientId, AccountType = AccountType.Own,
+                State = ConvertIntentState.Paid, StripeSubscriptionId = "sub_1", // already past AwaitingPayment
+                CreatedAt = _clock.UtcNow, UpdatedAt = _clock.UtcNow,
+            };
+            intentId = intent.Id;
+            seed.ConvertIntents.Add(intent);
+            seed.SaveChanges();
+        }
+
+        // A later renewal invoice for the same subscription (distinct event id) must not re-promote.
+        var payload = InvoicePaidEvent("evt_renewal", "in_renewal", "cus_1", "sub_1", amountPaid: 9900);
+        await CreateIngestor().IngestAsync("evt_renewal", "invoice.paid", payload, CancellationToken.None);
+
+        await using var db = _db.CreateContext();
+        db.ConvertIntents.Single(i => i.Id == intentId).State.Should().Be(ConvertIntentState.Paid);
+    }
+
     private static string InvoicePaidEvent(
         string eventId, string invoiceId, string customerId, string? subscriptionId, long amountPaid)
     {
