@@ -33,8 +33,19 @@ else
     @if (c.MergedIntoClientId is Guid mergedInto)
     {
         <MudAlert Severity="Severity.Info" Class="mb-4" Dense="true">
-            This account was merged into another and is <b>retired</b> — its vendor records are now monitored under the surviving account.
-            <MudLink Href="@($"/clients/{mergedInto}")" Class="ml-1">Open the surviving account →</MudLink>
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                <span>
+                    This account was merged into another and is <b>retired</b> — its vendor records are now monitored under the surviving account.
+                    <MudLink Href="@($"/clients/{mergedInto}")" Class="ml-1">Open the surviving account →</MudLink>
+                </span>
+                @* Reverse the merge: restore this account and move its links/history back. Operator-only. *@
+                <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
+                    <MudTooltip Arrow="true" Text="Merged by mistake? Unmerge to restore this account and move its links and history back off the survivor.">
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                                   StartIcon="@Icons.Material.Filled.CallSplit" OnClick="OpenUnmergeAsync">Unmerge…</MudButton>
+                    </MudTooltip>
+                </AuthorizeView>
+            </MudStack>
         </MudAlert>
     }
 
@@ -317,6 +328,22 @@ else
             Nav.NavigateTo($"/clients/{survivorId}");
         else
             await ReloadAsync();
+    }
+
+    private async Task OpenUnmergeAsync()
+    {
+        if (_detail is null) return;
+        var parameters = new DialogParameters<UnmergeClientDialog>
+        {
+            { d => d.DuplicateClientId, _detail.Client.Id },
+            { d => d.DuplicateClientName, _detail.Client.BusinessName },
+        };
+        var dialog = await Dialogs.ShowAsync<UnmergeClientDialog>(null, parameters);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+
+        // This page is now a live account again — reload it in place.
+        await ReloadAsync();
     }
 
     private async Task HandleSetExpiryAsync(TrialPeriod trial)
