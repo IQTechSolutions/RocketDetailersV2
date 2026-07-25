@@ -1,0 +1,82 @@
+@* Record the human intent to convert a trial client to a paying subscriber. A0 shell:
+   captures account type + package and creates a ConvertIntent in Drafted. No Stripe, no GHL. *@
+@using RD.Domain
+@using RD.Web.Services
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ConvertService Convert
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Convert to subscriber</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+            Record that <b>@ClientName</b> agreed to subscribe. This starts the conversion —
+            the subscription is drafted next and a human approves the charge. Nothing is billed yet.
+        </MudText>
+
+        <MudRadioGroup T="AccountType" @bind-Value="_accountType" Class="mb-2">
+            <MudRadio T="AccountType" Value="AccountType.Own" Color="Color.Primary" Dense="true">
+                Own account — flat service fee (client pays Meta for ad spend)
+            </MudRadio>
+            <MudRadio T="AccountType" Value="AccountType.Master" Color="Color.Primary" Dense="true">
+                Master account — subscription covers ad spend
+            </MudRadio>
+        </MudRadioGroup>
+
+        @if (_accountType == AccountType.Master)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">
+                Master-account billing isn't automated yet — this records the intent, but handle the
+                variable ad-spend billing manually for now.
+            </MudAlert>
+        }
+
+        <MudSelect T="Guid?" @bind-Value="_packageId" Label="Package" Dense="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true">
+            @foreach (var p in _packages)
+            {
+                <MudSelectItem T="Guid?" Value="@p.Id">@p.Name</MudSelectItem>
+            }
+        </MudSelect>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@_busy" OnClick="ConfirmAsync">
+            @(_busy ? "Starting…" : "Convert")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    [Parameter, EditorRequired] public Guid ClientId { get; set; }
+    [Parameter] public string ClientName { get; set; } = "";
+    [Parameter] public AccountType InitialAccountType { get; set; } = AccountType.Own;
+    [Parameter] public Guid? InitialPackageId { get; set; }
+
+    private AccountType _accountType;
+    private Guid? _packageId;
+    private IReadOnlyList<PackageOption> _packages = [];
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _accountType = InitialAccountType;
+        _packageId = InitialPackageId;
+        _packages = await Convert.GetActivePackagesAsync();
+    }
+
+    private async Task ConfirmAsync()
+    {
+        _busy = true;
+        var actor = (await AuthProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "operator";
+        var result = await Convert.CreateIntentAsync(ClientId, _accountType, _packageId, actor);
+        _busy = false;
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        if (result.Ok) Dialog!.Close(DialogResult.Ok(result.IntentId!.Value));
+    }
+}

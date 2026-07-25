@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using RD.Infrastructure;
 
@@ -11,9 +12,11 @@ using RD.Infrastructure;
 namespace RD.Infrastructure.Migrations
 {
     [DbContext(typeof(RdDbContext))]
-    partial class RdDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260725001720_ClientMergeAudit")]
+    partial class ClientMergeAudit
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -314,67 +317,6 @@ namespace RD.Infrastructure.Migrations
                     b.HasIndex("DuplicateId", "ReversedAt");
 
                     b.ToTable("ClientMergeAudits");
-                });
-
-            modelBuilder.Entity("RD.Domain.Entities.ConvertIntent", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("AccountType")
-                        .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("nvarchar(10)");
-
-                    b.Property<Guid>("ClientId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("CreatedByUserId")
-                        .HasMaxLength(450)
-                        .HasColumnType("nvarchar(450)");
-
-                    b.Property<string>("DraftedActionJson")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<DateTimeOffset?>("ExpiresAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<Guid?>("PackageId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<byte[]>("RowVersion")
-                        .IsConcurrencyToken()
-                        .IsRequired()
-                        .ValueGeneratedOnAddOrUpdate()
-                        .HasColumnType("rowversion");
-
-                    b.Property<string>("State")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)");
-
-                    b.Property<string>("StripeCustomerId")
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ClientId")
-                        .IsUnique()
-                        .HasFilter("[State] NOT IN ('Closed', 'Expired', 'Failed', 'Reversed')");
-
-                    b.HasIndex("PackageId");
-
-                    b.HasIndex("State", "ExpiresAt");
-
-                    b.ToTable("ConvertIntents");
                 });
 
             modelBuilder.Entity("RD.Domain.Entities.Decision", b =>
@@ -1423,24 +1365,6 @@ namespace RD.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("PackageId")
                         .OnDelete(DeleteBehavior.Restrict);
-
-                    b.Navigation("Package");
-                });
-
-            modelBuilder.Entity("RD.Domain.Entities.ConvertIntent", b =>
-                {
-                    b.HasOne("RD.Domain.Entities.Client", "Client")
-                        .WithMany()
-                        .HasForeignKey("ClientId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("RD.Domain.Entities.Package", "Package")
-                        .WithMany()
-                        .HasForeignKey("PackageId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.Navigation("Client");
 
                     b.Navigation("Package");
                 });

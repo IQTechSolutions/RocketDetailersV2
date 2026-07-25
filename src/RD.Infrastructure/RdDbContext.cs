@@ -17,6 +17,8 @@ public class AppUser : IdentityUser { }
 public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbContext<AppUser>(options)
 {
     public DbSet<Client> Clients => Set<Client>();
+    public DbSet<ClientMergeAudit> ClientMergeAudits => Set<ClientMergeAudit>();
+    public DbSet<ConvertIntent> ConvertIntents => Set<ConvertIntent>();
     public DbSet<TrialPeriod> TrialPeriods => Set<TrialPeriod>();
     public DbSet<IdentityLink> IdentityLinks => Set<IdentityLink>();
     public DbSet<MappingVerification> MappingVerifications => Set<MappingVerification>();
@@ -59,6 +61,30 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
             e.Property(x => x.ArrangementStatus).HasConversion<string>().HasMaxLength(15);
             e.Property(x => x.RowVersion).IsRowVersion();
             e.HasOne(x => x.Package).WithMany().HasForeignKey(x => x.PackageId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<ClientMergeAudit>(e =>
+        {
+            e.Property(x => x.MergedBy).HasMaxLength(100);
+            e.Property(x => x.ReversedBy).HasMaxLength(100);
+            // Reversal looks up the live (un-reversed) audit for a duplicate.
+            e.HasIndex(x => new { x.DuplicateId, x.ReversedAt });
+        });
+
+        b.Entity<ConvertIntent>(e =>
+        {
+            e.Property(x => x.AccountType).HasConversion<string>().HasMaxLength(10);
+            e.Property(x => x.State).HasConversion<string>().HasMaxLength(20);
+            e.Property(x => x.StripeCustomerId).HasMaxLength(100);
+            e.Property(x => x.CreatedByUserId).HasMaxLength(450); // AspNet Identity key length
+            e.Property(x => x.RowVersion).IsRowVersion();
+            e.HasOne(x => x.Client).WithMany().HasForeignKey(x => x.ClientId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Package).WithMany().HasForeignKey(x => x.PackageId).OnDelete(DeleteBehavior.Restrict);
+            // One ACTIVE (non-terminal) conversion per client — a second Convert click cannot
+            // create a parallel intent. Terminal states are excluded so history accumulates.
+            e.HasIndex(x => x.ClientId).IsUnique()
+                .HasFilter("[State] NOT IN ('Closed', 'Expired', 'Failed', 'Reversed')");
+            e.HasIndex(x => new { x.State, x.ExpiresAt }); // the AwaitingPayment expiry sweep
         });
 
         b.Entity<TrialPeriod>(e =>

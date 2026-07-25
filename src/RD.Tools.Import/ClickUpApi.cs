@@ -117,6 +117,10 @@ public static partial class ClickUpApi
     public static string? MetaCampaignId(string? url)
         => Match(url, MetaCampaignRegex());
 
+    /// <summary>Pulls a Meta ad-account id from an Ads Manager URL (act={digits}).</summary>
+    public static string? MetaAdAccountFromUrl(string? url)
+        => Match(url, MetaActRegex());
+
     private static string? Match(string? input, Regex rx)
     {
         if (string.IsNullOrWhiteSpace(input)) return null;
@@ -127,6 +131,7 @@ public static partial class ClickUpApi
     [GeneratedRegex(@"/contacts/detail/([A-Za-z0-9]+)")] private static partial Regex GhlContactRegex();
     [GeneratedRegex(@"/location/([A-Za-z0-9]+)")] private static partial Regex GhlLocationRegex();
     [GeneratedRegex(@"selected_campaign_ids=(\d+)")] private static partial Regex MetaCampaignRegex();
+    [GeneratedRegex(@"[?&]act=(\d+)")] private static partial Regex MetaActRegex();
 
     // ── JSON helpers ────────────────────────────────────────────────────────────
 

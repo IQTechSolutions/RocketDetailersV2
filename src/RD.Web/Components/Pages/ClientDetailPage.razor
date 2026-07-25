@@ -33,8 +33,20 @@ else
     @if (c.MergedIntoClientId is Guid mergedInto)
     {
         <MudAlert Severity="Severity.Info" Class="mb-4" Dense="true">
-            This account was merged into another and is <b>retired</b> — its vendor records are now monitored under the surviving account.
-            <MudLink Href="@($"/clients/{mergedInto}")" Class="ml-1">Open the surviving account →</MudLink>
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                <span>
+                    This account was merged into another and is <b>retired</b> — its vendor records are now monitored under the surviving account.
+                    <MudLink Href="@($"/clients/{mergedInto}")" Class="ml-1">Open the surviving account →</MudLink>
+                </span>
+                @* Reverse the merge: restore this account and move its links/history back. Operator-only. *@
+                <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
+                    <MudTooltip Arrow="true" Text="Merged by mistake? Unmerge to restore this account and move its links and history back off the survivor.">
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                                   StartIcon="@Icons.Material.Filled.CallSplit"
+                                   OnClick="@(() => OpenUnmergeAsync(c.Id, c.BusinessName))">Unmerge…</MudButton>
+                    </MudTooltip>
+                </AuthorizeView>
+            </MudStack>
         </MudAlert>
     }
 
@@ -56,6 +68,16 @@ else
                                StartIcon="@Icons.Material.Filled.Merge" OnClick="OpenMergeAsync">Merge…</MudButton>
                 </MudTooltip>
             </AuthorizeView>
+            @* Convert a trial to a paying subscriber — records the human intent and starts the billing draft. Operator-only, trials only. *@
+            @if (c.ContractType == ContractType.Trial && c.MergedIntoClientId is null)
+            {
+                <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="convertAuth">
+                    <MudTooltip Arrow="true" Text="Client agreed to subscribe? Start the conversion — records intent and drafts the subscription (a human approves the charge; nothing is billed yet).">
+                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.PointOfSale" OnClick="OpenConvertAsync">Convert…</MudButton>
+                    </MudTooltip>
+                </AuthorizeView>
+            }
             @* Mode changes are gated on verified mappings — the control exists but stays honest about why it's locked. *@
             <MudTooltip Arrow="true" Text="Mode changes unlock after mapping verification (M2). Until then every client stays where the ladder put them.">
                 <span>
@@ -74,6 +96,43 @@ else
             @if (!string.IsNullOrEmpty(c.Phone)) { <span> · @c.Phone</span> }
         </MudText>
     </MudPaper>
+
+    @* ---- Merged-in accounts: reverse a merge from the survivor, where operators land.
+           Retired duplicates drop out of every listing, so this is their only reachable entry point. ---- *@
+    @if (_detail.Absorbed.Count > 0)
+    {
+        <MudPaper Elevation="1" Class="pa-4 mb-4">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.Merge" Color="Color.Primary" />
+                <MudText Typo="Typo.h6">Merged-in accounts</MudText>
+                <HelpHint Text="Duplicate records retired into this account — their links and history are monitored here. Unmerge to restore one as its own live account again." />
+                <MudSpacer />
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@_detail.Absorbed.Count retired</MudChip>
+            </MudStack>
+            <MudStack Spacing="3">
+                @foreach (var m in _detail.Absorbed)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                        <div>
+                            <MudText Typo="Typo.body1">@m.BusinessName</MudText>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                @(m.ContactName ?? "No contact name")@(m.MergedAt is { } at ? $" · merged {at:yyyy-MM-dd}" : "")
+                            </MudText>
+                        </div>
+                        <MudSpacer />
+                        <MudLink Href="@($"/clients/{m.Id}")">Open →</MudLink>
+                        <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
+                            <MudTooltip Arrow="true" Text="Restore this account and move its links and history back off this one.">
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                                           StartIcon="@Icons.Material.Filled.CallSplit"
+                                           OnClick="@(() => OpenUnmergeAsync(m.Id, m.BusinessName))">Unmerge…</MudButton>
+                            </MudTooltip>
+                        </AuthorizeView>
+                    </MudStack>
+                }
+            </MudStack>
+        </MudPaper>
+    }
 
     @* ---- Account health: what's currently wrong with this account. ---- *@
     <MudPaper Elevation="1" Class="pa-4 mb-4">
@@ -317,6 +376,36 @@ else
             Nav.NavigateTo($"/clients/{survivorId}");
         else
             await ReloadAsync();
+    }
+
+    private async Task OpenConvertAsync()
+    {
+        if (_detail is null) return;
+        var parameters = new DialogParameters<ConvertToSubscriberDialog>
+        {
+            { d => d.ClientId, _detail.Client.Id },
+            { d => d.ClientName, _detail.Client.BusinessName },
+            { d => d.InitialAccountType, _detail.Client.AccountType },
+        };
+        var dialog = await Dialogs.ShowAsync<ConvertToSubscriberDialog>(null, parameters);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+        await ReloadAsync();
+    }
+
+    private async Task OpenUnmergeAsync(Guid duplicateId, string duplicateName)
+    {
+        var parameters = new DialogParameters<UnmergeClientDialog>
+        {
+            { d => d.DuplicateClientId, duplicateId },
+            { d => d.DuplicateClientName, duplicateName },
+        };
+        var dialog = await Dialogs.ShowAsync<UnmergeClientDialog>(null, parameters);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+
+        // Whichever page we're on, its merged-in list / retired state just changed — reload.
+        await ReloadAsync();
     }
 
     private async Task HandleSetExpiryAsync(TrialPeriod trial)

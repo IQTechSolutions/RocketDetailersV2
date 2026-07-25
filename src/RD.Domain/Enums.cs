@@ -71,3 +71,15 @@ public enum InvestigationKind
 public enum ArrangementStatus { Unknown = 0, Inferred = 1, NeedsReview = 2, Confirmed = 3 }
 
 public enum TrialOutcome { Active = 0, Promoted = 1, Expired = 2, Extended = 3 }
+
+/// <summary>
+/// Lifecycle of a trial→subscriber ConvertIntent. Terminal states (Closed, Expired,
+/// Failed, Reversed) are excluded from the "one active intent per client" filtered
+/// unique index, so a client can hold many historical intents but only one live one.
+/// Expired is recoverable → Paid on a late payment.
+/// </summary>
+public enum ConvertIntentState
+{
+    Drafted = 0, AwaitingPayment = 1, Paid = 2, Closed = 3,
+    Expired = 4, Failed = 5, Reversed = 6
+}

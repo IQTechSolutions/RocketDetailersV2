@@ -30,6 +30,18 @@ Deferred work with context. Nothing here is forgotten — it is deliberately seq
 **Priority:** P3
 **Depends on:** M1 ledger in production
 
+### Master-account variable-billing wedge (Convert→Bill→Close follow-on)
+
+**What:** Automate trial→subscriber conversion billing for **master-account** (Meta-flagged) clients, whose subscription covers *variable* ad spend + service — via metered/usage Stripe billing (metered price or per-cycle invoice items computed from the ad-spend ledger).
+
+**Why:** The own-account Convert→Bill→Close wedge ships first with a flat service-fee Stripe Price (a fixed price can't represent variable ad-spend billing). Master-account is the exception path, not the default, so it stays manual until the own-account machine is proven. Ties into Step-3 "payments cover ad spend" enforcement, which is master-account-only.
+
+**Context:** From /plan-eng-review outside voice (2026-07-25). The own-account wedge proves the whole Convert→Bill→Close machine (button, ConvertIntent, draft, Stripe idempotency-key, webhook→intent correlation via `metadata.convert_intent_id`, `closed` write, GhlWriteMarker loop-safety, cancel-on-reverse). Master adds only the variable-billing computation on top. Keep the `ConvertIntent.AccountType` branch point in the own-account build so master is a drop-in, not a rewrite. See design doc `~/.gstack/projects/IQTechSolutions-RocketDetailersV2/ivanr-feat-identity-admin-console-design-20260725-192624.md` (Outside-Voice Hardening section).
+
+**Effort:** M (human ~1-2 wks / CC ~½ day)
+**Priority:** P2
+**Depends on:** Own-account Convert→Bill→Close wedge shipped; ad-spend ledger (M1) in production
+
 ## Testing
 
 ### M2 test coverage debt (from /ship coverage audit, 2026-07-24)
