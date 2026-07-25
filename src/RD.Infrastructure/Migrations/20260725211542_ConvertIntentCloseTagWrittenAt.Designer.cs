@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using RD.Infrastructure;
 
@@ -11,9 +12,11 @@ using RD.Infrastructure;
 namespace RD.Infrastructure.Migrations
 {
     [DbContext(typeof(RdDbContext))]
-    partial class RdDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260725211542_ConvertIntentCloseTagWrittenAt")]
+    partial class ConvertIntentCloseTagWrittenAt
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

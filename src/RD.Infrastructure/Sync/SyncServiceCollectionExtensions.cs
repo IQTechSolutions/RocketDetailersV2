@@ -22,6 +22,7 @@ public static class SyncServiceCollectionExtensions
         services.Configure<GhlOptions>(config.GetSection(GhlOptions.SectionName));
         services.Configure<SafetyOptions>(config.GetSection(SafetyOptions.SectionName));
         services.Configure<EnforcementOptions>(config.GetSection(EnforcementOptions.SectionName));
+        services.Configure<ConvertOptions>(config.GetSection(ConvertOptions.SectionName));
 
         services.TryAddSingleton<IClock, SystemClock>();
         services.TryAddSingleton<RetryHelper>();
@@ -46,6 +47,7 @@ public static class SyncServiceCollectionExtensions
         services.AddScoped<PolicyEvaluationJob>();
         services.AddScoped<GhlDeliveryVerificationJob>();
         services.AddScoped<ConvertExpirySweepJob>();
+        services.AddScoped<ConvertCloseWriteJob>();
 
         return services;
     }

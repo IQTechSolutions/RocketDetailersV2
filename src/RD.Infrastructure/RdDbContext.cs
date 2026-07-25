@@ -82,6 +82,7 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
             e.Property(x => x.StripeCustomerId).HasMaxLength(100);
             e.Property(x => x.StripeSubscriptionId).HasMaxLength(100);
             e.Property(x => x.CloseTagContactId).HasMaxLength(100);
+            e.HasIndex(x => new { x.State, x.CloseTagWrittenAt }); // the close-write job's work query
             e.Property(x => x.CreatedByUserId).HasMaxLength(450); // AspNet Identity key length
             e.Property(x => x.RowVersion).IsRowVersion();
             e.HasOne(x => x.Client).WithMany().HasForeignKey(x => x.ClientId).OnDelete(DeleteBehavior.Restrict);

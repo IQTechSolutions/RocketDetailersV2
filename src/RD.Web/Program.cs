@@ -145,6 +145,9 @@ recurring.AddOrUpdate<PolicyEvaluationJob>("policy-evaluation", j => j.RunAsync(
 // Reap conversions billed but never paid (AwaitingPayment past ExpiresAt → Expired). Hourly is ample
 // for a multi-day payment window; a late payment after expiry is recovered by the webhook.
 recurring.AddOrUpdate<ConvertExpirySweepJob>("convert-expiry-sweep", j => j.RunAsync(CancellationToken.None), "0 * * * *");
+// Write the `close` tag on paid conversions (fires the onboarding chain). No-op until
+// Convert:CloseTagWriteEnabled is turned on; even then GHL TestMode redirects to the test contact.
+recurring.AddOrUpdate<ConvertCloseWriteJob>("convert-close-write", j => j.RunAsync(CancellationToken.None), "*/5 * * * *");
 
 // The outbox dispatcher is the single pump for external writes. It is always
 // scheduled but harmless until a client is promoted out of Shadow (nothing to
