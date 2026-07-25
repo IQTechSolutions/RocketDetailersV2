@@ -45,6 +45,11 @@ public sealed record AccountHealth(IReadOnlyList<AccountIssue> Issues)
     public bool IsHealthy => Issues.Count == 0;
 }
 
+/// <summary>A duplicate account retired into this client. Surfaced on the survivor so a
+/// merge can be reversed from where operators actually land — retired accounts drop
+/// out of the directory, so their own page is otherwise unreachable.</summary>
+public sealed record MergedAccountRow(Guid Id, string BusinessName, string? ContactName, DateTimeOffset? MergedAt);
+
 /// <summary>Everything the client detail page shows, loaded in one factory scope.</summary>
 public sealed record ClientDetail(
     Client Client,
@@ -52,7 +57,8 @@ public sealed record ClientDetail(
     IReadOnlyList<TrialPeriod> Trials,
     IReadOnlyList<LedgerEntry> Ledger,
     AccountHealth Health,
-    IReadOnlyDictionary<Guid, string> ExternalLinks);
+    IReadOnlyDictionary<Guid, string> ExternalLinks,
+    IReadOnlyList<MergedAccountRow> Absorbed);
 
 public class ClientDirectoryService(IDbContextFactory<RdDbContext> factory, VendorLinks vendorLinks)
 {
@@ -113,6 +119,14 @@ public class ClientDirectoryService(IDbContextFactory<RdDbContext> factory, Vend
 
         var health = BuildHealth(client, links, openInvestigations, hasCurrentVerification);
 
+        // Duplicates retired into this client — the survivor is where operators land,
+        // so this is where an accidental merge is reversed from.
+        var absorbed = await db.Clients.AsNoTracking()
+            .Where(c => c.MergedIntoClientId == id)
+            .OrderByDescending(c => c.MergedAt)
+            .Select(c => new MergedAccountRow(c.Id, c.BusinessName, c.ContactName, c.MergedAt))
+            .ToListAsync(ct);
+
         // GHL contact deep-links are location-scoped; resolve each contact's
         // location from the messages we've observed for it.
         var ghlContactIds = links
@@ -138,7 +152,7 @@ public class ClientDirectoryService(IDbContextFactory<RdDbContext> factory, Vend
             if (url is not null) externalLinks[l.Id] = url;
         }
 
-        return new ClientDetail(client, links, trials, ledger, health, externalLinks);
+        return new ClientDetail(client, links, trials, ledger, health, externalLinks, absorbed);
     }
 
     /// <summary>
