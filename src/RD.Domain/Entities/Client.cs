@@ -113,6 +113,15 @@ public class PackageVersion
     public decimal? TrialSpendCap { get; set; }
     public string CurrencyCode { get; set; } = "USD";
     public string? OfferName { get; set; }
+
+    /// <summary>
+    /// The Stripe Price this version bills at conversion — the own-account flat service fee.
+    /// Feeds the Convert→Bill→Close draft (A1) and the billing amount-cap band. Null until set
+    /// via the price-book admin. Master-account variable (ad-spend-covering) billing does NOT
+    /// use a fixed price — that is a separate follow-on wedge.
+    /// </summary>
+    public string? StripePriceId { get; set; }
+
     public required string CreatedBy { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }

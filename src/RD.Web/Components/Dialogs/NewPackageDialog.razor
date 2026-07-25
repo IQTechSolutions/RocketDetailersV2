@@ -1,0 +1,37 @@
+@* Create a new package. Pricing is set separately via a version (Set price). *@
+@using RD.Web.Services
+@inject PackageAdminService Packages
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">New package</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudTextField @bind-Value="_name" Label="Package name" Variant="Variant.Outlined"
+                      Immediate="true" Placeholder="e.g. Full Detail Launch" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="@(_busy || string.IsNullOrWhiteSpace(_name))" OnClick="ConfirmAsync">
+            @(_busy ? "Creating…" : "Create")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    private string _name = "";
+    private bool _busy;
+
+    private async Task ConfirmAsync()
+    {
+        _busy = true;
+        var result = await Packages.CreatePackageAsync(_name);
+        _busy = false;
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        if (result.Ok) Dialog!.Close(DialogResult.Ok(true));
+    }
+}

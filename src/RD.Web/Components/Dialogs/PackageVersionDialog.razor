@@ -1,0 +1,81 @@
+@* Add a new effective-dated version of a package — sets the Stripe price the Convert draft bills against.
+   Never rewrites history; the new terms take over going forward. *@
+@using RD.Web.Services
+@inject PackageAdminService Packages
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Set price — @PackageName</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+            Saves a new effective-dated version; the prior version stays in history. The Stripe Price ID
+            is what a conversion bills the own-account service fee against.
+        </MudText>
+        <MudTextField @bind-Value="_stripePriceId" Label="Stripe Price ID" Placeholder="price_..."
+                      Variant="Variant.Outlined" Class="mb-3" />
+        <MudTextField @bind-Value="_offerName" Label="Offer name" Variant="Variant.Outlined" Class="mb-3" />
+        <MudGrid Spacing="2">
+            <MudItem xs="6">
+                <MudNumericField T="decimal" @bind-Value="_dailyRate" Label="Daily rate" Min="0" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="6">
+                <MudNumericField T="decimal" @bind-Value="_dailyBudget" Label="Daily budget" Min="0" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="6">
+                <MudNumericField T="decimal?" @bind-Value="_trialSpendCap" Label="Trial spend cap (optional)" Min="0" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="6">
+                <MudTextField @bind-Value="_currency" Label="Currency" Variant="Variant.Outlined" />
+            </MudItem>
+        </MudGrid>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@_busy" OnClick="ConfirmAsync">
+            @(_busy ? "Saving…" : "Save version")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    [Parameter, EditorRequired] public Guid PackageId { get; set; }
+    [Parameter] public string PackageName { get; set; } = "";
+    [Parameter] public string? InitialStripePriceId { get; set; }
+    [Parameter] public string? InitialOfferName { get; set; }
+    [Parameter] public decimal InitialDailyRate { get; set; }
+    [Parameter] public decimal InitialDailyBudget { get; set; }
+    [Parameter] public decimal? InitialTrialSpendCap { get; set; }
+    [Parameter] public string InitialCurrency { get; set; } = "USD";
+
+    private string? _stripePriceId;
+    private string? _offerName;
+    private decimal _dailyRate;
+    private decimal _dailyBudget;
+    private decimal? _trialSpendCap;
+    private string _currency = "USD";
+    private bool _busy;
+
+    protected override void OnInitialized()
+    {
+        _stripePriceId = InitialStripePriceId;
+        _offerName = InitialOfferName;
+        _dailyRate = InitialDailyRate;
+        _dailyBudget = InitialDailyBudget;
+        _trialSpendCap = InitialTrialSpendCap;
+        _currency = string.IsNullOrWhiteSpace(InitialCurrency) ? "USD" : InitialCurrency;
+    }
+
+    private async Task ConfirmAsync()
+    {
+        _busy = true;
+        var result = await Packages.AddVersionAsync(
+            PackageId, _stripePriceId, _offerName, _dailyRate, _dailyBudget, _trialSpendCap, _currency);
+        _busy = false;
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        if (result.Ok) Dialog!.Close(DialogResult.Ok(true));
+    }
+}

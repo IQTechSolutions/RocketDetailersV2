@@ -129,6 +129,7 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
         {
             e.Property(x => x.CurrencyCode).HasMaxLength(3).IsUnicode(false);
             e.Property(x => x.OfferName).HasMaxLength(200);
+            e.Property(x => x.StripePriceId).HasMaxLength(100);
             e.Property(x => x.CreatedBy).HasMaxLength(100);
             e.Property(x => x.DailyRate).HasPrecision(19, 4);
             e.Property(x => x.DailyBudget).HasPrecision(19, 4);

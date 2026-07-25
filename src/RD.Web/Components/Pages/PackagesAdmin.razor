@@ -1,0 +1,96 @@
+@page "/admin/packages"
+@attribute [Authorize(Roles = Roles.Admin)]
+@using RD.Web.Components.Dialogs
+@using RD.Web.Services
+@inject PackageAdminService Packages
+@inject IDialogService Dialogs
+
+<PageTitle>Packages — Rocket Detailer Control Plane</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4" Spacing="2">
+    <MudIcon Icon="@Icons.Material.Filled.Sell" Size="Size.Large" />
+    <MudText Typo="Typo.h5">Packages &amp; pricing</MudText>
+    <MudSpacer />
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+               OnClick="CreateAsync">New package</MudButton>
+</MudStack>
+
+<MudText Typo="Typo.body2" Class="mud-text-secondary mb-4">
+    Each package's current version carries the Stripe Price a conversion bills the own-account service fee against.
+    Setting a price adds a new effective-dated version — history is never rewritten.
+</MudText>
+
+@if (_rows is null)
+{
+    <GridSkeleton Rows="6" />
+}
+else
+{
+    <MudPaper Elevation="1">
+        <MudDataGrid T="PackageAdminRow" Items="_rows" Dense="true" Hover="true" Elevation="0">
+            <Columns>
+                <PropertyColumn Property="x => x.Name" Title="Package" />
+                <TemplateColumn Title="Offer" Sortable="false">
+                    <CellTemplate>@(context.Item.OfferName ?? "—")</CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Stripe price" Sortable="false">
+                    <CellTemplate>
+                        @if (string.IsNullOrEmpty(context.Item.StripePriceId))
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">not set</MudChip>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2">@context.Item.StripePriceId</MudText>
+                        }
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Daily rate" Sortable="false">
+                    <CellTemplate>@context.Item.DailyRate.ToString("0.##") @context.Item.CurrencyCode</CellTemplate>
+                </TemplateColumn>
+                <PropertyColumn Property="x => x.VersionCount" Title="Versions" />
+                <TemplateColumn Title="" Sortable="false">
+                    <CellTemplate>
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.PriceChange"
+                                   OnClick="@(() => SetPriceAsync(context.Item))">Set price</MudButton>
+                    </CellTemplate>
+                </TemplateColumn>
+            </Columns>
+            <NoRecordsContent>
+                <EmptyState Icon="@Icons.Material.Filled.Sell" Title="No packages"
+                            Hint="Create the first package to price conversions." />
+            </NoRecordsContent>
+        </MudDataGrid>
+    </MudPaper>
+}
+
+@code {
+    private List<PackageAdminRow>? _rows;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync() => _rows = await Packages.ListAsync();
+
+    private async Task CreateAsync()
+    {
+        var dialog = await Dialogs.ShowAsync<NewPackageDialog>((string?)null);
+        if ((await dialog.Result) is { Canceled: false }) await ReloadAsync();
+    }
+
+    private async Task SetPriceAsync(PackageAdminRow row)
+    {
+        var parameters = new DialogParameters<PackageVersionDialog>
+        {
+            { d => d.PackageId, row.Id },
+            { d => d.PackageName, row.Name },
+            { d => d.InitialStripePriceId, row.StripePriceId },
+            { d => d.InitialOfferName, row.OfferName },
+            { d => d.InitialDailyRate, row.DailyRate },
+            { d => d.InitialDailyBudget, row.DailyBudget },
+            { d => d.InitialTrialSpendCap, row.TrialSpendCap },
+            { d => d.InitialCurrency, row.CurrencyCode },
+        };
+        var dialog = await Dialogs.ShowAsync<PackageVersionDialog>(null, parameters);
+        if ((await dialog.Result) is { Canceled: false }) await ReloadAsync();
+    }
+}
