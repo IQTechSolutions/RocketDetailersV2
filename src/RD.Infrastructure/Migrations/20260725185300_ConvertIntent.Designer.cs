@@ -12,7 +12,7 @@ using RD.Infrastructure;
 namespace RD.Infrastructure.Migrations
 {
     [DbContext(typeof(RdDbContext))]
-    [Migration("20260725184437_ConvertIntent")]
+    [Migration("20260725185300_ConvertIntent")]
     partial class ConvertIntent
     {
         /// <inheritdoc />
