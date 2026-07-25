@@ -45,6 +45,10 @@ if (args.Length > 0 && args[0].Equals("discover-clickup", StringComparison.Ordin
 if (args.Length > 0 && args[0].Equals("mark-trials", StringComparison.OrdinalIgnoreCase))
     return await ClickUpTrialImportRunner.RunAsync(args);
 
+// "link-meta-clickup" verb: match existing clients to their Meta ad account / campaign from ClickUp fields (see LinkMetaClickUpRunner). Dry-run unless --commit.
+if (args.Length > 0 && args[0].Equals("link-meta-clickup", StringComparison.OrdinalIgnoreCase))
+    return await LinkMetaClickUpRunner.RunAsync(args);
+
 // Seed importer: one-time load of the reconciliation spreadsheet into SQL.
 // Disposable by design (design doc: "one-time spreadsheet import code").
 // Usage: dotnet run --project src/RD.Tools.Import -- "<xlsx path>" [--conn "<connection string>"] [--force]
