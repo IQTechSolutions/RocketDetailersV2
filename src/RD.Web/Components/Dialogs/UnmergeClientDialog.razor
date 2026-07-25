@@ -1,0 +1,72 @@
+@* Reverse a merge: move the retired duplicate's links, rows and history back off the
+   survivor and make it a live account again. Deterministic — replays the merge's
+   recorded snapshot in reverse. *@
+@using RD.Infrastructure.Reconciliation
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ClientMergeService Merge
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Unmerge account</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+            This moves <b>@DuplicateClientName</b>'s links, subscriptions and history back off the
+            surviving account and makes it a <b>live account again</b> — restoring its previous
+            enforcement mode. Vendor records are untouched.
+        </MudText>
+
+        @if (_preview is null)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+        }
+        else if (_preview.Blocked is not null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true">@_preview.Blocked</MudAlert>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                Restoring <b>@_preview.DuplicateName</b> from <b>@_preview.SurvivorName</b>:
+                @_preview.LinksToRestore link(s) move back · @_preview.TrialsToRestore trial(s) move back ·
+                @_preview.InvestigationsToReopen investigation item(s) reopen.
+                Ledger history that rolled up returns to this account. Profile blanks the merge
+                filled are cleared only where the survivor still holds the copied value.
+            </MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="@(_busy || _preview is null || _preview.Blocked is not null)"
+                   OnClick="ConfirmAsync">
+            @(_busy ? "Unmerging…" : "Unmerge")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    [Parameter, EditorRequired] public Guid DuplicateClientId { get; set; }
+    [Parameter] public string DuplicateClientName { get; set; } = "";
+
+    private UnmergePreview? _preview;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+        => _preview = await Merge.UnmergePreviewAsync(DuplicateClientId);
+
+    private async Task ConfirmAsync()
+    {
+        if (_preview?.Blocked is not null) return;
+        _busy = true;
+        var actor = (await AuthProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "operator";
+        var result = await Merge.UnmergeAsync(DuplicateClientId, actor);
+        _busy = false;
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        if (result.Ok) Dialog!.Close(DialogResult.Ok(result.RestoredClientId!.Value));
+    }
+}
