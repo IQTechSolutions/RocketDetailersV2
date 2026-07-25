@@ -1,0 +1,157 @@
+@page "/admin/users"
+@attribute [Authorize(Roles = Roles.Admin)]
+@using System.Security.Claims
+@using RD.Web.Components.Dialogs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IdentityAdminService Admin
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>Users — Rocket Detailer Control Plane</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4" Spacing="2">
+    <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Large" />
+    <MudText Typo="Typo.h5">Users</MudText>
+    <MudButton Href="/admin/roles" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Badge">Roles &amp; claims</MudButton>
+    <MudSpacer />
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PersonAdd"
+               OnClick="CreateAsync">New user</MudButton>
+</MudStack>
+
+@if (_users is null)
+{
+    <GridSkeleton Rows="6" />
+}
+else
+{
+    <MudPaper Elevation="1">
+        <MudDataGrid T="UserRow" Items="_users" Dense="true" Hover="true" Elevation="0">
+            <Columns>
+                <TemplateColumn Title="Email">
+                    <CellTemplate>
+                        <MudText Typo="Typo.body2">@context.Item.Email</MudText>
+                        @if (context.Item.Id == _currentUserId)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Info">you</MudChip>
+                        }
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Roles" Sortable="false">
+                    <CellTemplate>
+                        @if (context.Item.Roles.Count == 0)
+                        {
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">— no roles —</MudText>
+                        }
+                        else
+                        {
+                            @foreach (var role in context.Item.Roles)
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                         Color="@(role == Roles.Admin ? Color.Primary : Color.Default)">@role</MudChip>
+                            }
+                        }
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Status" Sortable="false">
+                    <CellTemplate>
+                        @if (context.Item.LockedOut)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled" Icon="@Icons.Material.Filled.Lock">Locked</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined">Active</MudChip>
+                        }
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="" Sortable="false">
+                    <CellTemplate>
+                        <MudMenu Icon="@Icons.Material.Filled.MoreVert" Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+                            <MudMenuItem Icon="@Icons.Material.Filled.Badge" OnClick="@(() => EditRolesAsync(context.Item))">Edit roles</MudMenuItem>
+                            <MudMenuItem Icon="@Icons.Material.Filled.Password" OnClick="@(() => SetPasswordAsync(context.Item))">Set password</MudMenuItem>
+                            @if (context.Item.LockedOut)
+                            {
+                                <MudMenuItem Icon="@Icons.Material.Filled.LockOpen" OnClick="@(() => SetLockAsync(context.Item, false))">Unlock</MudMenuItem>
+                            }
+                            else
+                            {
+                                <MudMenuItem Icon="@Icons.Material.Filled.Lock" OnClick="@(() => SetLockAsync(context.Item, true))">Lock out</MudMenuItem>
+                            }
+                            <MudDivider />
+                            <MudMenuItem Icon="@Icons.Material.Filled.DeleteForever" IconColor="Color.Error" OnClick="@(() => DeleteAsync(context.Item))">Delete</MudMenuItem>
+                        </MudMenu>
+                    </CellTemplate>
+                </TemplateColumn>
+            </Columns>
+            <NoRecordsContent>
+                <EmptyState Icon="@Icons.Material.Filled.PersonOff" Title="No users" Hint="Create the first user to get started." />
+            </NoRecordsContent>
+        </MudDataGrid>
+    </MudPaper>
+}
+
+@code {
+    private List<UserRow>? _users;
+    private string _currentUserId = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUserId = (await AuthProvider.GetAuthenticationStateAsync()).User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync() => _users = await Admin.ListUsersAsync();
+
+    private async Task CreateAsync()
+    {
+        var dialog = await Dialogs.ShowAsync<CreateUserDialog>((string?)null);
+        if ((await dialog.Result) is { Canceled: false }) await ReloadAsync();
+    }
+
+    private async Task EditRolesAsync(UserRow user)
+    {
+        var parameters = new DialogParameters<EditUserRolesDialog>
+        {
+            { d => d.UserId, user.Id },
+            { d => d.UserEmail, user.Email },
+            { d => d.CurrentRoles, user.Roles },
+        };
+        var dialog = await Dialogs.ShowAsync<EditUserRolesDialog>(null, parameters);
+        if ((await dialog.Result) is { Canceled: false }) await ReloadAsync();
+    }
+
+    private async Task SetPasswordAsync(UserRow user)
+    {
+        var parameters = new DialogParameters<SetPasswordDialog>
+        {
+            { d => d.UserId, user.Id },
+            { d => d.UserEmail, user.Email },
+        };
+        var dialog = await Dialogs.ShowAsync<SetPasswordDialog>(null, parameters);
+        await dialog.Result;
+    }
+
+    private async Task SetLockAsync(UserRow user, bool locked)
+    {
+        var verb = locked ? "Lock out" : "Unlock";
+        var confirmed = await Dialogs.ShowMessageBoxAsync($"{verb} {user.Email}?",
+            locked ? "They won't be able to sign in until unlocked." : "They'll be able to sign in again.",
+            yesText: verb, cancelText: "Cancel");
+        if (confirmed != true) return;
+        var result = await Admin.SetLockoutAsync(user.Id, locked, _currentUserId);
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        if (result.Ok) await ReloadAsync();
+    }
+
+    private async Task DeleteAsync(UserRow user)
+    {
+        var confirmed = await Dialogs.ShowMessageBoxAsync($"Delete {user.Email}?",
+            "This permanently removes the user account. This can't be undone.",
+            yesText: "Delete", cancelText: "Cancel");
+        if (confirmed != true) return;
+        var result = await Admin.DeleteUserAsync(user.Id, _currentUserId);
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        if (result.Ok) await ReloadAsync();
+    }
+}

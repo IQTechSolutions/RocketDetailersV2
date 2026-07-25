@@ -1,0 +1,85 @@
+@* Manage the claims on a role (AspNetRoleClaims). Every user in the role inherits them. *@
+@using RD.Web.Services
+@inject IdentityAdminService Admin
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent><MudText Typo="Typo.h6">Claims — @RoleName</MudText></TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+            Claims attached to this role are inherited by every user in it — use them for fine-grained,
+            claims-based authorization on top of the role.
+        </MudText>
+
+        @if (_claims.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary mb-2">No claims on this role yet.</MudText>
+        }
+        else
+        {
+            <MudSimpleTable Dense="true" Hover="true" Class="mb-3">
+                <thead>
+                    <tr><th>Type</th><th>Value</th><th style="width:1%"></th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var claim in _claims)
+                    {
+                        <tr>
+                            <td>@claim.Type</td>
+                            <td>@claim.Value</td>
+                            <td>
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                               OnClick="@(() => RemoveAsync(claim))" aria-label="Remove claim" />
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+
+        <MudText Typo="Typo.subtitle2" Class="mb-1">Add a claim</MudText>
+        <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+            <MudTextField @bind-Value="_newType" Label="Type" Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Immediate="true" Placeholder="e.g. permission" />
+            <MudTextField @bind-Value="_newValue" Label="Value" Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Immediate="true" Placeholder="e.g. clients.export" />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="AddAsync"
+                       Disabled="@(_busy || string.IsNullOrWhiteSpace(_newType))">Add</MudButton>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Close(DialogResult.Ok(true)))">Done</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    [Parameter, EditorRequired] public string RoleId { get; set; } = "";
+    [Parameter] public string? RoleName { get; set; }
+
+    private List<RoleClaimRow> _claims = [];
+    private string _newType = "";
+    private string _newValue = "";
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync() => _claims = await Admin.ListRoleClaimsAsync(RoleId);
+
+    private async Task AddAsync()
+    {
+        _busy = true;
+        var result = await Admin.AddRoleClaimAsync(RoleId, _newType, _newValue);
+        _busy = false;
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        if (result.Ok) { _newType = ""; _newValue = ""; await ReloadAsync(); }
+    }
+
+    private async Task RemoveAsync(RoleClaimRow claim)
+    {
+        var result = await Admin.RemoveRoleClaimAsync(RoleId, claim.Type, claim.Value);
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        if (result.Ok) await ReloadAsync();
+    }
+}

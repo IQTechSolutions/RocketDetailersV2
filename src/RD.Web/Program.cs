@@ -64,6 +64,7 @@ builder.Services.AddScoped<TrialAdminService>();
 builder.Services.AddScoped<OpsService>();
 builder.Services.AddScoped<GhlContactAdminService>();
 builder.Services.AddScoped<ClientMergeService>();
+builder.Services.AddScoped<IdentityAdminService>();
 builder.Services.AddSingleton<VendorLinks>();
 
 // Lane A gateways + sync jobs + the policy heartbeat + M2 enforcement services

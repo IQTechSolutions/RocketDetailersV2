@@ -1,0 +1,59 @@
+@* Create a user: email + initial password + roles. Admin-only (gated at the call site). *@
+@using RD.Web.Services
+@inject IdentityAdminService Admin
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent><MudText Typo="Typo.h6">New user</MudText></TitleContent>
+    <DialogContent>
+        <MudTextField @bind-Value="_email" Label="Email" Variant="Variant.Outlined" InputType="InputType.Email"
+                      Immediate="true" Class="mb-3" />
+        <MudTextField @bind-Value="_password" Label="Initial password" Variant="Variant.Outlined"
+                      InputType="InputType.Password" Immediate="true" Class="mb-3"
+                      HelperText="The user can change it after signing in." />
+        <MudText Typo="Typo.subtitle2" Class="mb-1">Roles</MudText>
+        @foreach (var role in _allRoles)
+        {
+            <MudCheckBox T="bool" Value="@_selected.Contains(role)" Dense="true"
+                         ValueChanged="@(v => Toggle(role, v))">@role</MudCheckBox>
+        }
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync"
+                   Disabled="@(_busy || string.IsNullOrWhiteSpace(_email) || string.IsNullOrWhiteSpace(_password))">
+            @(_busy ? "Creating…" : "Create user")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    private string _email = "";
+    private string _password = "";
+    private List<string> _allRoles = [];
+    private readonly HashSet<string> _selected = [];
+    private string? _error;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => _allRoles = await Admin.AllRoleNamesAsync();
+
+    private void Toggle(string role, bool on)
+    {
+        if (on) _selected.Add(role); else _selected.Remove(role);
+    }
+
+    private async Task SaveAsync()
+    {
+        _busy = true; _error = null;
+        var result = await Admin.CreateUserAsync(_email, _password, _selected);
+        _busy = false;
+        if (result.Ok) { Snackbar.Add(result.Message, Severity.Success); Dialog!.Close(DialogResult.Ok(true)); }
+        else _error = result.Message;
+    }
+}
