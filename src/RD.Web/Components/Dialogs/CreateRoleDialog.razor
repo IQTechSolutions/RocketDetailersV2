@@ -1,0 +1,40 @@
+@* Create a new role. Built-in roles (Admin/Operator/Viewer) already exist. *@
+@using RD.Web.Services
+@inject IdentityAdminService Admin
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent><MudText Typo="Typo.h6">New role</MudText></TitleContent>
+    <DialogContent>
+        <MudTextField @bind-Value="_name" Label="Role name" Variant="Variant.Outlined" Immediate="true"
+                      HelperText="e.g. Billing, Support. Roles gate features via authorization." />
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync"
+                   Disabled="@(_busy || string.IsNullOrWhiteSpace(_name))">
+            @(_busy ? "Creating…" : "Create role")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    private string _name = "";
+    private string? _error;
+    private bool _busy;
+
+    private async Task SaveAsync()
+    {
+        _busy = true; _error = null;
+        var result = await Admin.CreateRoleAsync(_name);
+        _busy = false;
+        if (result.Ok) { Snackbar.Add(result.Message, Severity.Success); Dialog!.Close(DialogResult.Ok(true)); }
+        else _error = result.Message;
+    }
+}

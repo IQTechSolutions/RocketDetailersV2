@@ -1,0 +1,62 @@
+@* Add/remove a user's roles. Guards (last Admin, self-demotion) live in the service. *@
+@using System.Security.Claims
+@using RD.Web.Services
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IdentityAdminService Admin
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+<MudDialog>
+    <TitleContent><MudText Typo="Typo.h6">Roles — @UserEmail</MudText></TitleContent>
+    <DialogContent>
+        @foreach (var role in _allRoles)
+        {
+            <MudCheckBox T="bool" Value="@_selected.Contains(role)" Dense="true"
+                         ValueChanged="@(v => Toggle(role, v))">@role</MudCheckBox>
+        }
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync" Disabled="@_busy">
+            @(_busy ? "Saving…" : "Save roles")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    [Parameter, EditorRequired] public string UserId { get; set; } = "";
+    [Parameter] public string? UserEmail { get; set; }
+    [Parameter] public IReadOnlyList<string> CurrentRoles { get; set; } = [];
+
+    private List<string> _allRoles = [];
+    private HashSet<string> _selected = [];
+    private string? _error;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _allRoles = await Admin.AllRoleNamesAsync();
+        _selected = CurrentRoles.ToHashSet();
+    }
+
+    private void Toggle(string role, bool on)
+    {
+        if (on) _selected.Add(role); else _selected.Remove(role);
+    }
+
+    private async Task SaveAsync()
+    {
+        _busy = true; _error = null;
+        var currentUserId = (await AuthProvider.GetAuthenticationStateAsync()).User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+        var result = await Admin.SetUserRolesAsync(UserId, _selected, currentUserId);
+        _busy = false;
+        if (result.Ok) { Snackbar.Add(result.Message, Severity.Success); Dialog!.Close(DialogResult.Ok(true)); }
+        else _error = result.Message;
+    }
+}

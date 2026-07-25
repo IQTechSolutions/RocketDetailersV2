@@ -1,0 +1,98 @@
+@page "/admin/roles"
+@attribute [Authorize(Roles = Roles.Admin)]
+@using RD.Web.Components.Dialogs
+@inject IdentityAdminService Admin
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+
+<PageTitle>Roles &amp; claims — Rocket Detailer Control Plane</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4" Spacing="2">
+    <MudIcon Icon="@Icons.Material.Filled.Badge" Size="Size.Large" />
+    <MudText Typo="Typo.h5">Roles &amp; claims</MudText>
+    <MudButton Href="/admin/users" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.People">Users</MudButton>
+    <MudSpacer />
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+               OnClick="CreateAsync">New role</MudButton>
+</MudStack>
+
+@if (_roles is null)
+{
+    <GridSkeleton Rows="4" />
+}
+else
+{
+    <MudPaper Elevation="1">
+        <MudDataGrid T="RoleRow" Items="_roles" Dense="true" Hover="true" Elevation="0">
+            <Columns>
+                <TemplateColumn Title="Role">
+                    <CellTemplate>
+                        <MudText Typo="Typo.body2">@context.Item.Name</MudText>
+                        @if (context.Item.IsBuiltIn)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Info">built-in</MudChip>
+                        }
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Users" Sortable="false">
+                    <CellTemplate>
+                        <MudText Typo="Typo.body2">@context.Item.UserCount</MudText>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="" Sortable="false">
+                    <CellTemplate>
+                        <MudStack Row="true" Spacing="1" Justify="Justify.FlexEnd">
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.VpnKey"
+                                       OnClick="@(() => ManageClaimsAsync(context.Item))">Claims</MudButton>
+                            <MudTooltip Arrow="true" Text="@(context.Item.IsBuiltIn ? "Built-in roles are referenced in code and can't be deleted." : "Delete this role")">
+                                <span>
+                                    <MudIconButton Icon="@Icons.Material.Filled.DeleteForever" Size="Size.Small" Color="Color.Error"
+                                                   Disabled="@context.Item.IsBuiltIn" OnClick="@(() => DeleteAsync(context.Item))"
+                                                   aria-label="Delete role" />
+                                </span>
+                            </MudTooltip>
+                        </MudStack>
+                    </CellTemplate>
+                </TemplateColumn>
+            </Columns>
+        </MudDataGrid>
+    </MudPaper>
+}
+
+@code {
+    private List<RoleRow>? _roles;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync() => _roles = await Admin.ListRolesAsync();
+
+    private async Task CreateAsync()
+    {
+        var dialog = await Dialogs.ShowAsync<CreateRoleDialog>((string?)null);
+        if ((await dialog.Result) is { Canceled: false }) await ReloadAsync();
+    }
+
+    private async Task ManageClaimsAsync(RoleRow role)
+    {
+        var parameters = new DialogParameters<RoleClaimsDialog>
+        {
+            { d => d.RoleId, role.Id },
+            { d => d.RoleName, role.Name },
+        };
+        var dialog = await Dialogs.ShowAsync<RoleClaimsDialog>(null, parameters);
+        await dialog.Result;
+    }
+
+    private async Task DeleteAsync(RoleRow role)
+    {
+        var confirmed = await Dialogs.ShowMessageBoxAsync($"Delete role {role.Name}?",
+            role.UserCount > 0
+                ? $"{role.UserCount} user(s) are in this role and will lose it. This can't be undone."
+                : "This can't be undone.",
+            yesText: "Delete", cancelText: "Cancel");
+        if (confirmed != true) return;
+        var result = await Admin.DeleteRoleAsync(role.Id);
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        if (result.Ok) await ReloadAsync();
+    }
+}
