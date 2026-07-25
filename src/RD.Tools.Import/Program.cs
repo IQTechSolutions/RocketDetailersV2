@@ -49,6 +49,22 @@ if (args.Length > 0 && args[0].Equals("mark-trials", StringComparison.OrdinalIgn
 if (args.Length > 0 && args[0].Equals("link-meta-clickup", StringComparison.OrdinalIgnoreCase))
     return await LinkMetaClickUpRunner.RunAsync(args);
 
+// "reconcile-report" verb: read-only exact-id overlap report between ClickUp and the app DB (see ReconcileReportRunner).
+if (args.Length > 0 && args[0].Equals("reconcile-report", StringComparison.OrdinalIgnoreCase))
+    return await ReconcileReportRunner.RunAsync(args);
+
+// "match-report" verb: read-only GHL-anchored exact-id matcher vs name matching — agreement/disagreement + backfill sizing (see MatchReportRunner).
+if (args.Length > 0 && args[0].Equals("match-report", StringComparison.OrdinalIgnoreCase))
+    return await MatchReportRunner.RunAsync(args);
+
+// "backfill-phones" verb: write ClickUp phones onto exact-id-matched clients that have none (see BackfillPhonesRunner). Dry-run unless --commit.
+if (args.Length > 0 && args[0].Equals("backfill-phones", StringComparison.OrdinalIgnoreCase))
+    return await BackfillPhonesRunner.RunAsync(args);
+
+// "surface-review" verb: raise investigations for name/id disagreements + name-only matches (see SurfaceReviewRunner). Dry-run unless --commit.
+if (args.Length > 0 && args[0].Equals("surface-review", StringComparison.OrdinalIgnoreCase))
+    return await SurfaceReviewRunner.RunAsync(args);
+
 // Seed importer: one-time load of the reconciliation spreadsheet into SQL.
 // Disposable by design (design doc: "one-time spreadsheet import code").
 // Usage: dotnet run --project src/RD.Tools.Import -- "<xlsx path>" [--conn "<connection string>"] [--force]

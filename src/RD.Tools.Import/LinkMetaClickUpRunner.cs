@@ -67,27 +67,10 @@ public static class LinkMetaClickUpRunner
         var ct = CancellationToken.None;
         var now = DateTimeOffset.UtcNow;
 
-        // ── Match indexes over existing clients (projections only) ───────────────
-        var clients = await db.Clients
-            .Select(c => new { c.Id, c.BusinessName, c.ContactName, c.Email, c.Phone })
-            .ToListAsync(ct);
-        var nameById = clients.ToDictionary(c => c.Id, c => c.BusinessName);
-
-        var byEmail = new Dictionary<string, HashSet<Guid>>(StringComparer.OrdinalIgnoreCase);
-        var byPhone = new Dictionary<string, HashSet<Guid>>(StringComparer.OrdinalIgnoreCase);
-        var byName = new Dictionary<string, HashSet<Guid>>(StringComparer.OrdinalIgnoreCase);
-        void Index(Dictionary<string, HashSet<Guid>> ix, string? key, Guid id)
-        {
-            if (string.IsNullOrWhiteSpace(key)) return;
-            (ix.TryGetValue(key, out var set) ? set : ix[key] = new HashSet<Guid>()).Add(id);
-        }
-        foreach (var c in clients)
-        {
-            Index(byEmail, NormEmail(c.Email), c.Id);
-            Index(byPhone, PhoneTail(c.Phone), c.Id);
-            Index(byName, NameNormalizer.Normalize(c.BusinessName), c.Id);
-            Index(byName, NameNormalizer.Normalize(c.ContactName), c.Id);
-        }
+        // ── Exact-id-first matcher (GHL → Stripe → campaign, then fuzzy name) ─────
+        var index = await ClickUpMatchIndex.BuildAsync(db, ct);
+        var nameById = (await db.Clients.Select(c => new { c.Id, c.BusinessName }).ToListAsync(ct))
+            .ToDictionary(c => c.Id, c => c.BusinessName);
 
         // ── Existing Meta links (dedup + campaign conflict) ──────────────────────
         var clientHasLink = new HashSet<(Guid, LinkKind, string)>();
@@ -101,9 +84,9 @@ public static class LinkMetaClickUpRunner
             if (l.Kind == LinkKind.Campaign) campaignOwner[l.ExternalId] = l.ClientId;
         }
 
-        int matched = 0, masterUsers = 0, ownAccounts = 0, noMeta = 0, unmatched = 0, ambiguous = 0;
+        int matched = 0, masterUsers = 0, ownAccounts = 0, noMeta = 0, unmatched = 0;
         int adAccountAdds = 0, campaignAdds = 0, alreadyLinked = 0, conflicts = 0, masterActSkipped = 0;
-        var bySignal = new Dictionary<string, int> { ["email"] = 0, ["phone"] = 0, ["name"] = 0 };
+        var bySignal = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var processed = new HashSet<Guid>();
         var ownSample = new List<string>();
         var toAdd = new List<(Guid ClientId, LinkKind Kind, string ExternalId)>();
@@ -111,12 +94,11 @@ public static class LinkMetaClickUpRunner
 
         foreach (var t in tasks)
         {
-            var (clientId, signal) = Resolve(t, byEmail, byPhone, byName);
-            if (signal == "ambiguous") { ambiguous++; continue; }
+            var (clientId, signal, _) = index.Resolve(t);
             if (clientId is not { } id) { unmatched++; continue; }
 
             matched++;
-            bySignal[signal]++;
+            bySignal[signal] = bySignal.GetValueOrDefault(signal) + 1;
             if (!processed.Add(id)) continue; // one ClickUp row per client (first match wins)
 
             var adAccountId = AdAccountId(t);
@@ -156,14 +138,14 @@ public static class LinkMetaClickUpRunner
             }
         }
 
-        Console.WriteLine($"[link-meta-clickup] matched {matched} existing clients (email:{bySignal["email"]}, phone:{bySignal["phone"]}, name:{bySignal["name"]}).");
+        Console.WriteLine($"[link-meta-clickup] matched {matched} existing clients ({string.Join(", ", bySignal.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key}:{kv.Value}"))}).");
         Console.WriteLine($"[link-meta-clickup]   classification: master-account users: {masterUsers}, own ad accounts: {ownAccounts}, no Meta info: {noMeta}");
         Console.WriteLine($"[link-meta-clickup]   Meta ad-account links to add: {adAccountAdds} (own/specific)");
         Console.WriteLine($"[link-meta-clickup]   shared master-act links {(includeMasterAct ? "included" : "skipped")}: {masterActSkipped}");
         Console.WriteLine($"[link-meta-clickup]   Meta campaign links to add:   {campaignAdds}");
         Console.WriteLine($"[link-meta-clickup]   already linked (skipped):     {alreadyLinked}");
         Console.WriteLine($"[link-meta-clickup]   campaign conflicts flagged:   {conflicts}");
-        Console.WriteLine($"[link-meta-clickup] unmatched ClickUp tasks: {unmatched}   ambiguous: {ambiguous}\n");
+        Console.WriteLine($"[link-meta-clickup] unmatched ClickUp tasks: {unmatched}\n");
         if (ownSample.Count > 0)
         {
             Console.WriteLine("  Sample own-account clients → ad account:");
@@ -203,42 +185,6 @@ public static class LinkMetaClickUpRunner
         => Digits(t.Field("Ad account ID"))
            ?? ClickUpApi.MetaAdAccountFromUrl(t.Field("Ad Account Link"))
            ?? Digits(t.Field("FB AD ACC ID"));
-
-    private static (Guid? ClientId, string Signal) Resolve(
-        ClickUpTask t,
-        Dictionary<string, HashSet<Guid>> byEmail,
-        Dictionary<string, HashSet<Guid>> byPhone,
-        Dictionary<string, HashSet<Guid>> byName)
-    {
-        if (TaskEmail(t) is { } em && byEmail.TryGetValue(em, out var eset))
-            return eset.Count == 1 ? (eset.First(), "email") : (null, "ambiguous");
-        if (PhoneTail(t.Field("Ads Contact #")) is { } ph && byPhone.TryGetValue(ph, out var pset))
-            return pset.Count == 1 ? (pset.First(), "phone") : (null, "ambiguous");
-
-        var names = new[] { NameNormalizer.Normalize(t.Field("Business Name")), NameNormalizer.Normalize(t.Name) }
-            .Where(n => n.Length > 0).Distinct();
-        var hits = new HashSet<Guid>();
-        foreach (var n in names)
-            if (byName.TryGetValue(n, out var nset)) hits.UnionWith(nset);
-        if (hits.Count == 1) return (hits.First(), "name");
-        if (hits.Count > 1) return (null, "ambiguous");
-        return (null, "none");
-    }
-
-    private static string? TaskEmail(ClickUpTask t) => NormEmail(t.Field("Email")) ?? NormEmail(t.Field("stripe email/link"));
-
-    private static string? NormEmail(string? raw)
-    {
-        var s = raw?.Trim().ToLowerInvariant();
-        return !string.IsNullOrEmpty(s) && s.Contains('@') && !s.Contains(' ') ? s : null;
-    }
-
-    private static string? PhoneTail(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return null;
-        var digits = new string(raw.Where(char.IsDigit).ToArray());
-        return digits.Length >= 10 ? digits[^10..] : null;
-    }
 
     private static string? Digits(string? raw)
     {
