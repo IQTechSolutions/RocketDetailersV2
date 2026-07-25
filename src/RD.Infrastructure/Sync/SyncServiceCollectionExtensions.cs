@@ -45,6 +45,7 @@ public static class SyncServiceCollectionExtensions
         services.AddScoped<GhlMessageSyncJob>();
         services.AddScoped<PolicyEvaluationJob>();
         services.AddScoped<GhlDeliveryVerificationJob>();
+        services.AddScoped<ConvertExpirySweepJob>();
 
         return services;
     }

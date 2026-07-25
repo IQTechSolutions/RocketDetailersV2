@@ -288,8 +288,11 @@ public sealed class StripeWebhookIngestor(
     {
         if (string.IsNullOrEmpty(subscriptionId)) return;
 
+        // AwaitingPayment is the normal case; Expired covers a late payment that landed after the sweep
+        // reaped the intent — recovering it rather than stranding a paying client (money-received hole).
         var intent = await db.ConvertIntents.FirstOrDefaultAsync(
-            i => i.StripeSubscriptionId == subscriptionId && i.State == ConvertIntentState.AwaitingPayment, ct);
+            i => i.StripeSubscriptionId == subscriptionId
+                 && (i.State == ConvertIntentState.AwaitingPayment || i.State == ConvertIntentState.Expired), ct);
         if (intent is null) return;
 
         intent.State = ConvertIntentState.Paid;

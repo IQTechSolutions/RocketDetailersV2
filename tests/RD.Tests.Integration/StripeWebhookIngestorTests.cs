@@ -303,6 +303,39 @@ public sealed class StripeWebhookIngestorTests : IDisposable
         db.ConvertIntents.Single(i => i.Id == intentId).State.Should().Be(ConvertIntentState.Paid);
     }
 
+    [Fact]
+    public async Task InvoicePaid_RecoversAnExpiredConversion_LatePayment()
+    {
+        var clientId = _db.SeedClientWithLink(
+            ExternalSystem.Stripe, LinkKind.Customer, "cus_1",
+            (ExternalSystem.Stripe, LinkKind.Subscription, "sub_1"));
+
+        Guid intentId;
+        using (var seed = _db.CreateContext())
+        {
+            var intent = new ConvertIntent
+            {
+                Id = Guid.NewGuid(), ClientId = clientId, AccountType = AccountType.Own,
+                State = ConvertIntentState.Expired, StripeSubscriptionId = "sub_1", // swept before the client paid
+                CreatedAt = _clock.UtcNow, UpdatedAt = _clock.UtcNow,
+            };
+            intentId = intent.Id;
+            seed.ConvertIntents.Add(intent);
+            seed.TrialPeriods.Add(new TrialPeriod
+            {
+                Id = Guid.NewGuid(), ClientId = clientId, StartsAt = _clock.UtcNow.AddDays(-9), Outcome = TrialOutcome.Active,
+            });
+            seed.SaveChanges();
+        }
+
+        var payload = InvoicePaidEvent("evt_late", "in_late", "cus_1", "sub_1", amountPaid: 9900);
+        await CreateIngestor().IngestAsync("evt_late", "invoice.paid", payload, CancellationToken.None);
+
+        await using var db = _db.CreateContext();
+        db.ConvertIntents.Single(i => i.Id == intentId).State.Should().Be(ConvertIntentState.Paid);
+        db.TrialPeriods.Single(t => t.ClientId == clientId).Outcome.Should().Be(TrialOutcome.Promoted);
+    }
+
     private static string InvoicePaidEvent(
         string eventId, string invoiceId, string customerId, string? subscriptionId, long amountPaid)
     {

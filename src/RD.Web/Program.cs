@@ -142,6 +142,9 @@ if (!string.IsNullOrEmpty(builder.Configuration["Meta:AccessToken"]))
 if (!string.IsNullOrEmpty(builder.Configuration["Ghl:Locations:0:Token"]))
     recurring.AddOrUpdate<GhlMessageSyncJob>("ghl-message-sync", j => j.RunAsync(CancellationToken.None), "*/15 * * * *");
 recurring.AddOrUpdate<PolicyEvaluationJob>("policy-evaluation", j => j.RunAsync(CancellationToken.None), "*/5 * * * *");
+// Reap conversions billed but never paid (AwaitingPayment past ExpiresAt → Expired). Hourly is ample
+// for a multi-day payment window; a late payment after expiry is recovered by the webhook.
+recurring.AddOrUpdate<ConvertExpirySweepJob>("convert-expiry-sweep", j => j.RunAsync(CancellationToken.None), "0 * * * *");
 
 // The outbox dispatcher is the single pump for external writes. It is always
 // scheduled but harmless until a client is promoted out of Shadow (nothing to
