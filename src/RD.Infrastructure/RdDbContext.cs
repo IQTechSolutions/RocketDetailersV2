@@ -54,6 +54,10 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
             e.Property(x => x.Country).HasMaxLength(2);
             e.Property(x => x.CurrencyCode).HasMaxLength(3).IsUnicode(false);
             e.Property(x => x.ContractType).HasConversion<string>().HasMaxLength(10);
+            // The safe "Own" default lives on the entity (Client.AccountType initializer), NOT as a
+            // store HasDefaultValue: the enum's zero value is Master, so a store default would make EF
+            // omit an explicitly-set Master (== CLR default) from the INSERT and write the "Own" default
+            // instead — silently un-Master-ing the import path. Entity-level default keeps Master persistable.
             e.Property(x => x.AccountType).HasConversion<string>().HasMaxLength(10);
             e.Property(x => x.EnforcementMode).HasConversion<string>().HasMaxLength(10);
             e.Property(x => x.ExpectedAmount).HasPrecision(19, 4);

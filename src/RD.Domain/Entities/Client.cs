@@ -11,7 +11,15 @@ public class Client
     /// <summary>ISO 4217. Policy enforces USD-only in v1; non-USD rows route to needs-investigation.</summary>
     public string CurrencyCode { get; set; } = "USD";
     public ContractType ContractType { get; set; }
-    public AccountType AccountType { get; set; }
+    // Safe default: Own = the enforcement-INERT type. The AccountType enum's zero
+    // value is Master (the ad-spend-enforcement-ACTIVE type), so a Client created
+    // without setting this would otherwise persist as Master and be swept into
+    // arrangement-balance pauses (EligibilityPolicy rule 6). Defaulting to Own
+    // means a client is never *silently* enforcement-active — Master is only ever
+    // reached by an explicit, human-driven decision (import "Master Ad Account?",
+    // mark-master CLI, or the cockpit Convert dialog). Never rely on this default
+    // to mean "Master."
+    public AccountType AccountType { get; set; } = AccountType.Own;
     public EnforcementMode EnforcementMode { get; set; } = EnforcementMode.Shadow;
     public Guid? PackageId { get; set; }
     public Package? Package { get; set; }
