@@ -3,7 +3,9 @@
 @using RD.Domain
 @using RD.Domain.Entities
 @using RD.Web.Components.Dialogs
+@using RD.Web.Services
 @inject ClientDirectoryService Directory
+@inject ConvertService Convert
 @inject TrialAdminService Trials
 @inject IDialogService Dialogs
 @inject ISnackbar Snackbar
@@ -96,6 +98,38 @@ else
             @if (!string.IsNullOrEmpty(c.Phone)) { <span> · @c.Phone</span> }
         </MudText>
     </MudPaper>
+
+    @* ---- Pending conversion (A1 / Shadow): the Stripe action the app WOULD take for an in-flight
+           Convert. Draft only — nothing is billed until a human approves it. ---- *@
+    @if (_convertDraft is { } cd)
+    {
+        <MudPaper Elevation="1" Class="pa-4 mb-4">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2" Wrap="Wrap.Wrap">
+                <MudIcon Icon="@Icons.Material.Filled.PointOfSale" Color="Color.Primary" />
+                <MudText Typo="Typo.h6">Pending conversion</MudText>
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@cd.State</MudChip>
+                <HelpHint Text="A closer started a conversion. This is the Stripe action the app WOULD take — draft only (Shadow); nothing is billed until a human approves it." />
+                <MudSpacer />
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">started @cd.CreatedAt.ToString("yyyy-MM-dd HH:mm")</MudText>
+            </MudStack>
+            @if (cd.Draft.Ready)
+            {
+                <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true">@cd.Draft.Summary</MudAlert>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
+                    <MudText Typo="Typo.body2" Class="mb-1">Not auto-draftable yet:</MudText>
+                    <ul class="mud-typography mud-typography-body2" style="margin:0; padding-left:1.2rem;">
+                        @foreach (var b in cd.Draft.Blockers)
+                        {
+                            <li>@b</li>
+                        }
+                    </ul>
+                </MudAlert>
+            }
+        </MudPaper>
+    }
 
     @* ---- Merged-in accounts: reverse a merge from the survivor, where operators land.
            Retired duplicates drop out of every listing, so this is their only reachable entry point. ---- *@
@@ -344,18 +378,21 @@ else
     [Parameter] public Guid Id { get; set; }
 
     private ClientDetail? _detail;
+    private ActiveConvertDraft? _convertDraft;
     private bool _loading = true;
 
     protected override async Task OnParametersSetAsync()
     {
         _loading = true;
         _detail = await Directory.GetDetailAsync(Id);
+        _convertDraft = await Convert.GetActiveDraftAsync(Id);
         _loading = false;
     }
 
     private async Task ReloadAsync()
     {
         _detail = await Directory.GetDetailAsync(Id);
+        _convertDraft = await Convert.GetActiveDraftAsync(Id);
         StateHasChanged();
     }
 
