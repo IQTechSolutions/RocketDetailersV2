@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
@@ -27,6 +28,25 @@ public interface IStripeGateway
     /// subscription payments and direct one-off charges the invoice sweep misses.
     /// </summary>
     Task<IReadOnlyList<StripeChargeDto>> ListChargesAsync(DateTimeOffset? createdOnOrAfter, CancellationToken ct);
+
+    // ---- Writes (Convert→Bill→Close, rung B) ---------------------------------
+    // Every write carries an Idempotency-Key so a retried or double-clicked call resolves to a
+    // single Stripe object server-side. These are only ever invoked behind human approval (Assist).
+
+    /// <summary>Create a Stripe customer; returns the new customer id. Idempotency-safe.</summary>
+    Task<string> CreateCustomerAsync(string? name, string? email, string idempotencyKey, CancellationToken ct);
+
+    /// <summary>
+    /// Create a subscription for <paramref name="customerId"/> on <paramref name="priceId"/>, stamping
+    /// <paramref name="metadata"/> (e.g. convert_intent_id, so the first-payment webhook can correlate
+    /// back to the conversion). Idempotency-safe. Returns the created subscription.
+    /// </summary>
+    Task<StripeSubscriptionDto> CreateSubscriptionAsync(
+        string customerId, string priceId, IReadOnlyDictionary<string, string>? metadata,
+        string idempotencyKey, CancellationToken ct);
+
+    /// <summary>Cancel a subscription immediately. A subscription that is already gone (404) is treated as canceled.</summary>
+    Task CancelSubscriptionAsync(string subscriptionId, CancellationToken ct);
 }
 
 /// <summary>
@@ -191,6 +211,60 @@ public sealed class StripeGateway : IStripeGateway
             if (!envelope.HasMore || envelope.Data.Count == 0) return results;
             startingAfter = envelope.Data[^1].Id;
         }
+    }
+
+    public async Task<string> CreateCustomerAsync(string? name, string? email, string idempotencyKey, CancellationToken ct)
+    {
+        var form = new List<KeyValuePair<string, string>>();
+        if (!string.IsNullOrWhiteSpace(name)) form.Add(new("name", name.Trim()));
+        if (!string.IsNullOrWhiteSpace(email)) form.Add(new("email", email.Trim()));
+
+        var created = await PostAsync<CustomerJson>("v1/customers", form, idempotencyKey, ct);
+        if (string.IsNullOrEmpty(created.Id))
+            throw new HttpRequestException("Stripe customer create returned no id.");
+        return created.Id;
+    }
+
+    public async Task<StripeSubscriptionDto> CreateSubscriptionAsync(
+        string customerId, string priceId, IReadOnlyDictionary<string, string>? metadata,
+        string idempotencyKey, CancellationToken ct)
+    {
+        var form = new List<KeyValuePair<string, string>>
+        {
+            new("customer", customerId),
+            new("items[0][price]", priceId),
+        };
+        if (metadata is not null)
+            foreach (var kv in metadata)
+                form.Add(new($"metadata[{kv.Key}]", kv.Value));
+
+        var sub = await PostAsync<SubscriptionJson>("v1/subscriptions", form, idempotencyKey, ct);
+        if (string.IsNullOrEmpty(sub.Id))
+            throw new HttpRequestException("Stripe subscription create returned no id.");
+        return ToDto(sub);
+    }
+
+    public async Task CancelSubscriptionAsync(string subscriptionId, CancellationToken ct)
+    {
+        using var response = await _retry.SendAsync(
+            _http, () => new HttpRequestMessage(HttpMethod.Delete, $"v1/subscriptions/{Uri.EscapeDataString(subscriptionId)}"), ct);
+        // Cancelling an already-gone subscription is a no-op success — the end state is what we wanted.
+        if (response.StatusCode == HttpStatusCode.NotFound) return;
+        using var _ = await GatewayHttp.ReadDocumentAsync(response, ct); // throws on any other non-success
+    }
+
+    /// <summary>Form-encoded POST with an optional Idempotency-Key. Fresh message per retry (messages + content are single-use); the stable key makes retries safe.</summary>
+    private async Task<T> PostAsync<T>(
+        string relativeUrl, IEnumerable<KeyValuePair<string, string>> form, string? idempotencyKey, CancellationToken ct)
+    {
+        var formList = form.ToList(); // materialize so the factory can re-enumerate per attempt
+        using var response = await _retry.SendAsync(_http, () =>
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, relativeUrl) { Content = new FormUrlEncodedContent(formList) };
+            if (!string.IsNullOrEmpty(idempotencyKey)) req.Headers.Add("Idempotency-Key", idempotencyKey);
+            return req;
+        }, ct);
+        return await GatewayHttp.ReadAsAsync<T>(response, ct);
     }
 
     private static StripeChargeDto ToDto(ChargeJson c) => new(
