@@ -4,12 +4,15 @@
 @using RD.Domain.Entities
 @using RD.Web.Components.Dialogs
 @using RD.Web.Services
+@using Microsoft.AspNetCore.Components.Authorization
 @inject ClientDirectoryService Directory
 @inject ConvertService Convert
+@inject ConvertBillingService Billing
 @inject TrialAdminService Trials
 @inject IDialogService Dialogs
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
 
 <PageTitle>Client — Rocket Detailer Control Plane</PageTitle>
 
@@ -115,6 +118,17 @@ else
             @if (cd.Draft.Ready)
             {
                 <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true">@cd.Draft.Summary</MudAlert>
+                @if (cd.State == ConvertIntentState.Drafted)
+                {
+                    <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="billAuth">
+                        <MudStack Row="true" Justify="Justify.FlexEnd" Class="mt-3">
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.CreditCard"
+                                       Disabled="@_billing" OnClick="ApproveAndBillAsync">
+                                @(_billing ? "Billing…" : "Approve & bill")
+                            </MudButton>
+                        </MudStack>
+                    </AuthorizeView>
+                }
             }
             else
             {
@@ -380,6 +394,7 @@ else
     private ClientDetail? _detail;
     private ActiveConvertDraft? _convertDraft;
     private bool _loading = true;
+    private bool _billing;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -413,6 +428,24 @@ else
             Nav.NavigateTo($"/clients/{survivorId}");
         else
             await ReloadAsync();
+    }
+
+    private async Task ApproveAndBillAsync()
+    {
+        if (_convertDraft is not { } cd) return;
+        var confirmed = await Dialogs.ShowMessageBoxAsync(
+            "Approve & bill this conversion?",
+            "This creates a REAL Stripe subscription and starts recurring billing for this client. Nothing else is charged until they pay the first invoice.",
+            yesText: "Approve & bill", cancelText: "Cancel");
+        if (confirmed != true) return;
+
+        _billing = true;
+        StateHasChanged();
+        var actor = (await AuthProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "operator";
+        var result = await Billing.ExecuteAsync(cd.IntentId, actor);
+        _billing = false;
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        await ReloadAsync();
     }
 
     private async Task OpenConvertAsync()

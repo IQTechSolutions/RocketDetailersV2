@@ -140,8 +140,8 @@ public class ConvertService(IDbContextFactory<RdDbContext> factory, IClock clock
         return new ActiveConvertDraft(intent.Id, intent.State, intent.CreatedAt, ConvertDrafter.Draft(input));
     }
 
-    /// <summary>Snapshot the draft inputs from SQL projections for the pure <see cref="ConvertDrafter"/>.</summary>
-    private static async Task<ConvertDraftInput> LoadDraftInputAsync(
+    /// <summary>Snapshot the draft inputs from SQL projections for the pure <see cref="ConvertDrafter"/>. Shared with billing execute.</summary>
+    internal static async Task<ConvertDraftInput> LoadDraftInputAsync(
         RdDbContext db, Client client, AccountType accountType, Guid? packageId, CancellationToken ct)
     {
         string? priceId = null;

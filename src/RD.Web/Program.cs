@@ -62,6 +62,7 @@ builder.Services.AddScoped<MappingWizardService>();
 builder.Services.AddScoped<AnalyticsService>();
 builder.Services.AddScoped<TrialAdminService>();
 builder.Services.AddScoped<ConvertService>();
+builder.Services.AddScoped<ConvertBillingService>();
 builder.Services.AddScoped<PackageAdminService>();
 builder.Services.AddScoped<OpsService>();
 builder.Services.AddScoped<GhlContactAdminService>();

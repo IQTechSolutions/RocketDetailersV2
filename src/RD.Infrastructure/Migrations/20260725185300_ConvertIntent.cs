@@ -50,7 +50,7 @@ namespace RD.Infrastructure.Migrations
                 table: "ConvertIntents",
                 column: "ClientId",
                 unique: true,
-                filter: "[State] NOT IN ('Closed', 'Expired', 'Failed', 'Reversed')");
+                filter: "[State] IN ('Drafted', 'AwaitingPayment', 'Paid')");
 
             migrationBuilder.CreateIndex(
                 name: "IX_ConvertIntents_PackageId",

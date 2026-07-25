@@ -87,7 +87,7 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
             // One ACTIVE (non-terminal) conversion per client — a second Convert click cannot
             // create a parallel intent. Terminal states are excluded so history accumulates.
             e.HasIndex(x => x.ClientId).IsUnique()
-                .HasFilter("[State] NOT IN ('Closed', 'Expired', 'Failed', 'Reversed')");
+                .HasFilter("[State] IN ('Drafted', 'AwaitingPayment', 'Paid')");
             e.HasIndex(x => new { x.State, x.ExpiresAt }); // the AwaitingPayment expiry sweep
         });
 

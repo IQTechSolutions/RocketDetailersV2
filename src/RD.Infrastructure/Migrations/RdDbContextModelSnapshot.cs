@@ -368,7 +368,7 @@ namespace RD.Infrastructure.Migrations
 
                     b.HasIndex("ClientId")
                         .IsUnique()
-                        .HasFilter("[State] NOT IN ('Closed', 'Expired', 'Failed', 'Reversed')");
+                        .HasFilter("[State] IN ('Drafted', 'AwaitingPayment', 'Paid')");
 
                     b.HasIndex("PackageId");
 
