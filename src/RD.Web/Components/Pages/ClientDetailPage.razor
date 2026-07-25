@@ -42,7 +42,8 @@ else
                 <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
                     <MudTooltip Arrow="true" Text="Merged by mistake? Unmerge to restore this account and move its links and history back off the survivor.">
                         <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
-                                   StartIcon="@Icons.Material.Filled.CallSplit" OnClick="OpenUnmergeAsync">Unmerge…</MudButton>
+                                   StartIcon="@Icons.Material.Filled.CallSplit"
+                                   OnClick="@(() => OpenUnmergeAsync(c.Id, c.BusinessName))">Unmerge…</MudButton>
                     </MudTooltip>
                 </AuthorizeView>
             </MudStack>
@@ -85,6 +86,43 @@ else
             @if (!string.IsNullOrEmpty(c.Phone)) { <span> · @c.Phone</span> }
         </MudText>
     </MudPaper>
+
+    @* ---- Merged-in accounts: reverse a merge from the survivor, where operators land.
+           Retired duplicates drop out of every listing, so this is their only reachable entry point. ---- *@
+    @if (_detail.Absorbed.Count > 0)
+    {
+        <MudPaper Elevation="1" Class="pa-4 mb-4">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.Merge" Color="Color.Primary" />
+                <MudText Typo="Typo.h6">Merged-in accounts</MudText>
+                <HelpHint Text="Duplicate records retired into this account — their links and history are monitored here. Unmerge to restore one as its own live account again." />
+                <MudSpacer />
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@_detail.Absorbed.Count retired</MudChip>
+            </MudStack>
+            <MudStack Spacing="3">
+                @foreach (var m in _detail.Absorbed)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                        <div>
+                            <MudText Typo="Typo.body1">@m.BusinessName</MudText>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                @(m.ContactName ?? "No contact name")@(m.MergedAt is { } at ? $" · merged {at:yyyy-MM-dd}" : "")
+                            </MudText>
+                        </div>
+                        <MudSpacer />
+                        <MudLink Href="@($"/clients/{m.Id}")">Open →</MudLink>
+                        <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="auth">
+                            <MudTooltip Arrow="true" Text="Restore this account and move its links and history back off this one.">
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                                           StartIcon="@Icons.Material.Filled.CallSplit"
+                                           OnClick="@(() => OpenUnmergeAsync(m.Id, m.BusinessName))">Unmerge…</MudButton>
+                            </MudTooltip>
+                        </AuthorizeView>
+                    </MudStack>
+                }
+            </MudStack>
+        </MudPaper>
+    }
 
     @* ---- Account health: what's currently wrong with this account. ---- *@
     <MudPaper Elevation="1" Class="pa-4 mb-4">
@@ -330,19 +368,18 @@ else
             await ReloadAsync();
     }
 
-    private async Task OpenUnmergeAsync()
+    private async Task OpenUnmergeAsync(Guid duplicateId, string duplicateName)
     {
-        if (_detail is null) return;
         var parameters = new DialogParameters<UnmergeClientDialog>
         {
-            { d => d.DuplicateClientId, _detail.Client.Id },
-            { d => d.DuplicateClientName, _detail.Client.BusinessName },
+            { d => d.DuplicateClientId, duplicateId },
+            { d => d.DuplicateClientName, duplicateName },
         };
         var dialog = await Dialogs.ShowAsync<UnmergeClientDialog>(null, parameters);
         var result = await dialog.Result;
         if (result is null || result.Canceled) return;
 
-        // This page is now a live account again — reload it in place.
+        // Whichever page we're on, its merged-in list / retired state just changed — reload.
         await ReloadAsync();
     }
 
