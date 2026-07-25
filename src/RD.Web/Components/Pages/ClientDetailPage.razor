@@ -129,6 +129,15 @@ else
                         </MudStack>
                     </AuthorizeView>
                 }
+                else if (cd.State is ConvertIntentState.AwaitingPayment or ConvertIntentState.Paid)
+                {
+                    <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="cancelAuth">
+                        <MudStack Row="true" Justify="Justify.FlexEnd" Class="mt-3">
+                            <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Cancel"
+                                       Disabled="@_billing" OnClick="CancelBillingAsync">Cancel subscription</MudButton>
+                        </MudStack>
+                    </AuthorizeView>
+                }
             }
             else
             {
@@ -443,6 +452,24 @@ else
         StateHasChanged();
         var actor = (await AuthProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "operator";
         var result = await Billing.ExecuteAsync(cd.IntentId, actor);
+        _billing = false;
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        await ReloadAsync();
+    }
+
+    private async Task CancelBillingAsync()
+    {
+        if (_convertDraft is not { } cd) return;
+        var confirmed = await Dialogs.ShowMessageBoxAsync(
+            "Cancel this subscription?",
+            "This cancels the Stripe subscription and reverses the conversion. Recurring billing stops immediately.",
+            yesText: "Cancel subscription", cancelText: "Keep it");
+        if (confirmed != true) return;
+
+        _billing = true;
+        StateHasChanged();
+        var actor = (await AuthProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "operator";
+        var result = await Billing.CancelAsync(cd.IntentId, actor);
         _billing = false;
         Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
         await ReloadAsync();

@@ -92,6 +92,30 @@ public class ConvertBillingService(
         return new ConvertResult(true, $"Subscription {sub.Id} created — awaiting first payment.", intent.Id);
     }
 
+    /// <summary>
+    /// The off-switch: cancel the conversion's Stripe subscription and mark it Reversed. Human-approved
+    /// (an operator action), so it is NOT kill-switch-gated — stopping a charge only ever reduces exposure.
+    /// Idempotent at Stripe (a missing/already-canceled subscription is treated as done).
+    /// </summary>
+    public async Task<ConvertResult> CancelAsync(Guid intentId, string? actor = null, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var intent = await db.ConvertIntents.FirstOrDefaultAsync(i => i.Id == intentId, ct);
+        if (intent is null) return new ConvertResult(false, "Conversion not found (maybe it changed in another tab).");
+        if (string.IsNullOrEmpty(intent.StripeSubscriptionId))
+            return new ConvertResult(false, "No subscription to cancel — this conversion hasn't been billed yet.");
+        if (intent.State is ConvertIntentState.Reversed or ConvertIntentState.Expired or ConvertIntentState.Failed)
+            return new ConvertResult(false, $"Conversion is already {intent.State} — nothing to cancel.");
+
+        await stripe.CancelSubscriptionAsync(intent.StripeSubscriptionId, ct);
+
+        intent.State = ConvertIntentState.Reversed;
+        intent.UpdatedAt = clock.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        return new ConvertResult(true, $"Subscription {intent.StripeSubscriptionId} canceled — conversion reversed.", intent.Id);
+    }
+
     private IdentityLink NewLink(Guid clientId, LinkKind kind, string externalId) => new()
     {
         Id = Guid.NewGuid(),

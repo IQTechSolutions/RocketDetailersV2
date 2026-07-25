@@ -41,7 +41,7 @@ public sealed class ConvertBillingServiceTests : IDisposable
     }
 
     private (Guid clientId, Guid intentId) Seed(string? priceId, bool withCustomerLink,
-        ConvertIntentState state = ConvertIntentState.Drafted)
+        ConvertIntentState state = ConvertIntentState.Drafted, string? subscriptionId = null)
     {
         using var db = _db.CreateContext();
         var pkg = new Package { Id = Guid.NewGuid(), Name = "Pkg-" + Guid.NewGuid().ToString("N")[..6], IsActive = true };
@@ -68,7 +68,7 @@ public sealed class ConvertBillingServiceTests : IDisposable
         var intent = new ConvertIntent
         {
             Id = Guid.NewGuid(), ClientId = client.Id, AccountType = AccountType.Own, PackageId = pkg.Id,
-            State = state, CreatedAt = _clock.UtcNow, UpdatedAt = _clock.UtcNow,
+            State = state, StripeSubscriptionId = subscriptionId, CreatedAt = _clock.UtcNow, UpdatedAt = _clock.UtcNow,
         };
         db.ConvertIntents.Add(intent);
         db.SaveChanges();
@@ -145,6 +145,33 @@ public sealed class ConvertBillingServiceTests : IDisposable
 
         result.Ok.Should().BeFalse();
         result.Message.Should().Contain("already");
+        _server.LogEntries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Cancel_cancels_the_subscription_and_reverses_the_conversion()
+    {
+        var (_, intentId) = Seed(priceId: "price_1", withCustomerLink: true,
+            state: ConvertIntentState.Paid, subscriptionId: "sub_x");
+        _server.Given(Request.Create().WithPath("/v1/subscriptions/sub_x").UsingDelete())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { id = "sub_x", status = "canceled" }));
+
+        var result = await Service().CancelAsync(intentId, "op", CancellationToken.None);
+
+        result.Ok.Should().BeTrue();
+        await using var db = _db.CreateContext();
+        db.ConvertIntents.Single(i => i.Id == intentId).State.Should().Be(ConvertIntentState.Reversed);
+    }
+
+    [Fact]
+    public async Task Cancel_refuses_when_nothing_has_been_billed()
+    {
+        var (_, intentId) = Seed(priceId: "price_1", withCustomerLink: false, state: ConvertIntentState.Drafted);
+
+        var result = await Service().CancelAsync(intentId, "op", CancellationToken.None);
+
+        result.Ok.Should().BeFalse();
+        result.Message.Should().Contain("hasn't been billed");
         _server.LogEntries.Should().BeEmpty();
     }
 }
