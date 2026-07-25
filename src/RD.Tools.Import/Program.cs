@@ -37,6 +37,14 @@ if (args.Length > 0 && args[0].Equals("mark-master", StringComparison.OrdinalIgn
 if (args.Length > 0 && args[0].Equals("infer-arrangements", StringComparison.OrdinalIgnoreCase))
     return await ArrangementInferenceRunner.RunAsync(args);
 
+// "discover-clickup" verb: read-only ClickUp probe → custom-field catalog + trial cross-check (see ClickUpDiscoveryRunner).
+if (args.Length > 0 && args[0].Equals("discover-clickup", StringComparison.OrdinalIgnoreCase))
+    return await ClickUpDiscoveryRunner.RunAsync(args);
+
+// "mark-trials" verb: match ClickUp's active-trial cohort to EXISTING clients (email/phone/name) and mark them Trial — never creates clients (see ClickUpTrialImportRunner). Dry-run unless --commit.
+if (args.Length > 0 && args[0].Equals("mark-trials", StringComparison.OrdinalIgnoreCase))
+    return await ClickUpTrialImportRunner.RunAsync(args);
+
 // Seed importer: one-time load of the reconciliation spreadsheet into SQL.
 // Disposable by design (design doc: "one-time spreadsheet import code").
 // Usage: dotnet run --project src/RD.Tools.Import -- "<xlsx path>" [--conn "<connection string>"] [--force]
