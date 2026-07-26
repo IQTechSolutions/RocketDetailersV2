@@ -12,7 +12,12 @@ function Import-ProcessEnvironment([string] $Path) {
 
     $config = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     foreach ($property in $config.PSObject.Properties) {
-        [Environment]::SetEnvironmentVariable($property.Name, [string] $property.Value, 'Process')
+        # Windows PowerShell 5.1 writes UTF-8 files with a BOM. Depending on
+        # how configuration was produced, that marker can surface as the first
+        # character of a JSON string value and make SqlClient treat the first
+        # connection-string key as unknown.
+        $value = ([string] $property.Value).TrimStart([char] 0xFEFF)
+        [Environment]::SetEnvironmentVariable($property.Name, $value, 'Process')
     }
 }
 
