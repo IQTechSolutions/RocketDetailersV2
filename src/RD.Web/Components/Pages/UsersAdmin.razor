@@ -28,6 +28,11 @@ else
     <MudPaper Elevation="1">
         <MudDataGrid T="UserRow" Items="_users" Dense="true" Hover="true" Elevation="0">
             <Columns>
+                <TemplateColumn Title="Name">
+                    <CellTemplate>
+                        <MudText Typo="Typo.body2">@(context.Item.FullName ?? "—")</MudText>
+                    </CellTemplate>
+                </TemplateColumn>
                 <TemplateColumn Title="Email">
                     <CellTemplate>
                         <MudText Typo="Typo.body2">@context.Item.Email</MudText>
@@ -68,6 +73,7 @@ else
                 <TemplateColumn Title="" Sortable="false">
                     <CellTemplate>
                         <MudMenu Icon="@Icons.Material.Filled.MoreVert" Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+                            <MudMenuItem Icon="@Icons.Material.Filled.Person" OnClick="@(() => EditNameAsync(context.Item))">Edit name</MudMenuItem>
                             <MudMenuItem Icon="@Icons.Material.Filled.Badge" OnClick="@(() => EditRolesAsync(context.Item))">Edit roles</MudMenuItem>
                             <MudMenuItem Icon="@Icons.Material.Filled.Password" OnClick="@(() => SetPasswordAsync(context.Item))">Set password</MudMenuItem>
                             @if (context.Item.LockedOut)
@@ -106,6 +112,19 @@ else
     private async Task CreateAsync()
     {
         var dialog = await Dialogs.ShowAsync<CreateUserDialog>((string?)null);
+        if ((await dialog.Result) is { Canceled: false }) await ReloadAsync();
+    }
+
+    private async Task EditNameAsync(UserRow user)
+    {
+        var parameters = new DialogParameters<EditUserProfileDialog>
+        {
+            { d => d.UserId, user.Id },
+            { d => d.UserEmail, user.Email ?? "" },
+            { d => d.InitialFirstName, user.FirstName },
+            { d => d.InitialLastName, user.LastName },
+        };
+        var dialog = await Dialogs.ShowAsync<EditUserProfileDialog>(null, parameters);
         if ((await dialog.Result) is { Canceled: false }) await ReloadAsync();
     }
 

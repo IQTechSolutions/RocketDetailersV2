@@ -6,6 +6,10 @@
 <MudDialog>
     <TitleContent><MudText Typo="Typo.h6">New user</MudText></TitleContent>
     <DialogContent>
+        <MudGrid Spacing="2" Class="mb-3">
+            <MudItem xs="6"><MudTextField @bind-Value="_firstName" Label="First name" Variant="Variant.Outlined" /></MudItem>
+            <MudItem xs="6"><MudTextField @bind-Value="_lastName" Label="Surname" Variant="Variant.Outlined" /></MudItem>
+        </MudGrid>
         <MudTextField @bind-Value="_email" Label="Email" Variant="Variant.Outlined" InputType="InputType.Email"
                       Immediate="true" Class="mb-3" />
         <MudTextField @bind-Value="_password" Label="Initial password" Variant="Variant.Outlined"
@@ -34,6 +38,8 @@
 @code {
     [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
 
+    private string _firstName = "";
+    private string _lastName = "";
     private string _email = "";
     private string _password = "";
     private List<string> _allRoles = [];
@@ -51,7 +57,7 @@
     private async Task SaveAsync()
     {
         _busy = true; _error = null;
-        var result = await Admin.CreateUserAsync(_email, _password, _selected);
+        var result = await Admin.CreateUserAsync(_email, _password, _selected, _firstName, _lastName);
         _busy = false;
         if (result.Ok) { Snackbar.Add(result.Message, Severity.Success); Dialog!.Close(DialogResult.Ok(true)); }
         else _error = result.Message;

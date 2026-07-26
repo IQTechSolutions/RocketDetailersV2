@@ -1,0 +1,48 @@
+@* Edit a user's name and surname. Admin-only (gated at the call site). *@
+@using RD.Web.Services
+@inject IdentityAdminService Admin
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent><MudText Typo="Typo.h6">Edit name — @UserEmail</MudText></TitleContent>
+    <DialogContent>
+        <MudGrid Spacing="2">
+            <MudItem xs="6"><MudTextField @bind-Value="_firstName" Label="First name" Variant="Variant.Outlined" /></MudItem>
+            <MudItem xs="6"><MudTextField @bind-Value="_lastName" Label="Surname" Variant="Variant.Outlined" /></MudItem>
+        </MudGrid>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@_busy" OnClick="SaveAsync">
+            @(_busy ? "Saving…" : "Save")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
+
+    [Parameter, EditorRequired] public string UserId { get; set; } = "";
+    [Parameter] public string UserEmail { get; set; } = "";
+    [Parameter] public string? InitialFirstName { get; set; }
+    [Parameter] public string? InitialLastName { get; set; }
+
+    private string _firstName = "";
+    private string _lastName = "";
+    private bool _busy;
+
+    protected override void OnInitialized()
+    {
+        _firstName = InitialFirstName ?? "";
+        _lastName = InitialLastName ?? "";
+    }
+
+    private async Task SaveAsync()
+    {
+        _busy = true;
+        var result = await Admin.SetProfileAsync(UserId, _firstName, _lastName);
+        _busy = false;
+        Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+        if (result.Ok) Dialog!.Close(DialogResult.Ok(true));
+    }
+}

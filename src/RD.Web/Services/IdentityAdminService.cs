@@ -7,7 +7,14 @@ using RD.Web.Identity;
 namespace RD.Web.Services;
 
 /// <summary>One row of the users grid.</summary>
-public sealed record UserRow(string Id, string? Email, string? UserName, IReadOnlyList<string> Roles, bool LockedOut, bool EmailConfirmed);
+public sealed record UserRow(
+    string Id, string? Email, string? UserName, string? FirstName, string? LastName,
+    IReadOnlyList<string> Roles, bool LockedOut, bool EmailConfirmed)
+{
+    /// <summary>"First Last" when either name is set, else null.</summary>
+    public string? FullName => string.IsNullOrWhiteSpace($"{FirstName} {LastName}".Trim())
+        ? null : $"{FirstName} {LastName}".Trim();
+}
 
 /// <summary>One row of the roles grid. <see cref="IsBuiltIn"/> roles are referenced in code and can't be deleted.</summary>
 public sealed record RoleRow(string Id, string Name, int UserCount, bool IsBuiltIn);
@@ -39,19 +46,24 @@ public sealed class IdentityAdminService(UserManager<AppUser> users, RoleManager
         foreach (var u in list)
         {
             var userRoles = await users.GetRolesAsync(u);
-            rows.Add(new UserRow(u.Id, u.Email, u.UserName, userRoles.OrderBy(r => r).ToList(),
-                await users.IsLockedOutAsync(u), u.EmailConfirmed));
+            rows.Add(new UserRow(u.Id, u.Email, u.UserName, u.FirstName, u.LastName,
+                userRoles.OrderBy(r => r).ToList(), await users.IsLockedOutAsync(u), u.EmailConfirmed));
         }
         return rows;
     }
 
-    public async Task<AdminResult> CreateUserAsync(string email, string password, IEnumerable<string> assignRoles)
+    public async Task<AdminResult> CreateUserAsync(
+        string email, string password, IEnumerable<string> assignRoles, string? firstName = null, string? lastName = null)
     {
         email = email.Trim();
         if (string.IsNullOrWhiteSpace(email)) return new AdminResult(false, "An email is required.");
         if (await users.FindByEmailAsync(email) is not null) return new AdminResult(false, "A user with that email already exists.");
 
-        var user = new AppUser { UserName = email, Email = email, EmailConfirmed = true };
+        var user = new AppUser
+        {
+            UserName = email, Email = email, EmailConfirmed = true,
+            FirstName = Clean(firstName), LastName = Clean(lastName),
+        };
         var created = await users.CreateAsync(user, password);
         if (!created.Succeeded) return new AdminResult(false, Describe(created));
 
@@ -62,6 +74,19 @@ public sealed class IdentityAdminService(UserManager<AppUser> users, RoleManager
             if (!added.Succeeded) return new AdminResult(false, $"User created, but roles failed: {Describe(added)}");
         }
         return new AdminResult(true, $"Created {email}.");
+    }
+
+    public async Task<AdminResult> SetProfileAsync(string userId, string? firstName, string? lastName)
+    {
+        var user = await users.FindByIdAsync(userId);
+        if (user is null) return new AdminResult(false, "User not found.");
+
+        user.FirstName = Clean(firstName);
+        user.LastName = Clean(lastName);
+        var result = await users.UpdateAsync(user);
+        return result.Succeeded
+            ? new AdminResult(true, $"Name updated for {user.Email}.")
+            : new AdminResult(false, Describe(result));
     }
 
     public async Task<AdminResult> SetUserRolesAsync(string userId, IEnumerable<string> desiredRoles, string currentUserId)
@@ -221,4 +246,6 @@ public sealed class IdentityAdminService(UserManager<AppUser> users, RoleManager
 
     private static string Describe(IdentityResult result) =>
         string.Join("; ", result.Errors.Select(e => e.Description));
+
+    private static string? Clean(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 }

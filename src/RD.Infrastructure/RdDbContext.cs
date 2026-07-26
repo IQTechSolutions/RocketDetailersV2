@@ -6,7 +6,11 @@ using RD.Domain.Entities;
 
 namespace RD.Infrastructure;
 
-public class AppUser : IdentityUser { }
+public class AppUser : IdentityUser
+{
+    public string? FirstName { get; set; }
+    public string? LastName { get; set; }
+}
 
 /// <summary>
 /// Always resolve via IDbContextFactory&lt;RdDbContext&gt; — Blazor circuits are
@@ -44,6 +48,12 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
     protected override void OnModelCreating(ModelBuilder b)
     {
         base.OnModelCreating(b);
+
+        b.Entity<AppUser>(e =>
+        {
+            e.Property(x => x.FirstName).HasMaxLength(100);
+            e.Property(x => x.LastName).HasMaxLength(100);
+        });
 
         // Enums as strings for readability + CHECK-able values.
         b.Entity<Client>(e =>
