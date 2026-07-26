@@ -161,11 +161,20 @@ jobs:
           $configTemp = "$configPath.new"
           $launcherSource = Join-Path $PWD 'publish\_deploy\Start-RocketDetailer.ps1'
           $launcherTarget = Join-Path $root 'shared\service\Start-RocketDetailer.ps1'
+          $connectionString = ([string] $env:LIVE_CONNECTION_STRING).TrimStart([char] 0xFEFF)
+
+          if ($connectionString -notmatch '^(Data Source|Server)\s*=') {
+            throw 'LIVE_CONNECTION_STRING does not begin with a supported SQL Server key.'
+          }
 
           New-Item -ItemType Directory -Path $secrets -Force | Out-Null
-          @{
-            ConnectionStrings__RocketDetailers = $env:LIVE_CONNECTION_STRING
-          } | ConvertTo-Json | Set-Content -LiteralPath $configTemp -Encoding utf8
+          $configJson = @{
+            ConnectionStrings__RocketDetailers = $connectionString
+          } | ConvertTo-Json
+          [IO.File]::WriteAllText(
+            $configTemp,
+            $configJson,
+            [Text.UTF8Encoding]::new($false))
           Move-Item -LiteralPath $configTemp -Destination $configPath -Force
 
           $launcherBackup = "$launcherTarget.pre-dotnet"

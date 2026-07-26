@@ -18,7 +18,12 @@ using RD.Web.Identity;
 using RD.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
-var connectionString = builder.Configuration.GetConnectionString("RocketDetailers");
+// A UTF-8 BOM can survive as the first character when Windows PowerShell 5.1
+// bridges a secret through JSON. SqlClient then sees an invisible prefix on
+// the first key and reports that otherwise-valid key as unsupported.
+var connectionString = builder.Configuration
+    .GetConnectionString("RocketDetailers")
+    ?.TrimStart('\uFEFF');
 if (string.IsNullOrWhiteSpace(connectionString))
 {
     throw new InvalidOperationException(
