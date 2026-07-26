@@ -90,7 +90,7 @@ jobs:
 
     steps:
       - name: Check deployment configuration
-        shell: pwsh
+        shell: powershell
         env:
           LIVE_CONNECTION_STRING: ${{ secrets.LIVE_CONNECTION_STRING }}
         run: |
@@ -115,7 +115,7 @@ jobs:
           path: publish
 
       - name: Stage immutable release
-        shell: pwsh
+        shell: powershell
         run: |
           $root = '${{ vars.APP_ROOT }}'
           $releaseId = '${{ github.sha }}-${{ github.run_attempt }}'
@@ -142,11 +142,12 @@ jobs:
             throw "Launcher is invalid: $($parseErrors -join '; ')"
           }
 
-          "RELEASE_PATH=$release" >> $env:GITHUB_ENV
+          "RELEASE_PATH=$release" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "Staged release $releaseId."
 
       - name: Configure live service
-        shell: pwsh
+        shell: powershell
         env:
           LIVE_CONNECTION_STRING: ${{ secrets.LIVE_CONNECTION_STRING }}
         run: |
@@ -172,7 +173,7 @@ jobs:
           Write-Host 'External configuration and dual-runtime launcher are ready.'
 
       - name: Switch release and restart service
-        shell: pwsh
+        shell: powershell
         run: |
           $root = '${{ vars.APP_ROOT }}'
           $current = Join-Path $root 'current'
@@ -195,8 +196,10 @@ jobs:
             }
 
             New-Item -ItemType Junction -Path $current -Target $env:RELEASE_PATH | Out-Null
-            "PREVIOUS_RELEASE=$previous" >> $env:GITHUB_ENV
-            "SWITCHED=true" >> $env:GITHUB_ENV
+            "PREVIOUS_RELEASE=$previous" |
+              Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            "SWITCHED=true" |
+              Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
             Start-Service -Name $service -ErrorAction Stop
             Write-Host "Service started from $env:RELEASE_PATH."
@@ -211,7 +214,7 @@ jobs:
           }
 
       - name: Verify live health
-        shell: pwsh
+        shell: powershell
         run: |
           $urls = @(
             'http://127.0.0.1:3000/health',
@@ -240,7 +243,7 @@ jobs:
 
       - name: Roll back failed release
         if: failure() && env.SWITCHED == 'true'
-        shell: pwsh
+        shell: powershell
         run: |
           $root = '${{ vars.APP_ROOT }}'
           $current = Join-Path $root 'current'
@@ -266,10 +269,12 @@ jobs:
 
       - name: Deployment summary
         if: always()
-        shell: pwsh
+        shell: powershell
         run: |
-          "## Live deployment" >> $env:GITHUB_STEP_SUMMARY
-          "- Commit: ``${{ github.sha }}``" >> $env:GITHUB_STEP_SUMMARY
-          "- Release: ``$env:RELEASE_PATH``" >> $env:GITHUB_STEP_SUMMARY
-          "- Service: ``${{ vars.WINDOWS_SERVICE }}``" >> $env:GITHUB_STEP_SUMMARY
-          "- Result: ${{ job.status }}" >> $env:GITHUB_STEP_SUMMARY
+          @(
+            "## Live deployment"
+            "- Commit: ``${{ github.sha }}``"
+            "- Release: ``$env:RELEASE_PATH``"
+            "- Service: ``${{ vars.WINDOWS_SERVICE }}``"
+            "- Result: ${{ job.status }}"
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
