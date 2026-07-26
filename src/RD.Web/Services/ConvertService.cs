@@ -15,6 +15,26 @@ public sealed record ConvertResult(bool Ok, string Message, Guid? IntentId = nul
 /// <summary>A client's active conversion and its freshly-computed draft, for the pending-conversion panel.</summary>
 public sealed record ActiveConvertDraft(Guid IntentId, ConvertIntentState State, DateTimeOffset CreatedAt, ConvertDraft Draft);
 
+/// <summary>One row of the conversions queue — every conversion in flight, plus why it might be stuck.</summary>
+public sealed record ConversionRow(
+    Guid IntentId, Guid ClientId, string BusinessName, ConvertIntentState State, AccountType AccountType,
+    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, DateTimeOffset? ExpiresAt,
+    string? StripeSubscriptionId, bool HasGhlContact, bool CloseTagWritten)
+{
+    /// <summary>Non-null when this conversion needs a human to look at it, saying what's wrong.</summary>
+    public string? Attention => State switch
+    {
+        ConvertIntentState.Expired => "Billed but never paid — expired.",
+        ConvertIntentState.Paid when !HasGhlContact =>
+            "Paid but no GHL contact linked — onboarding cannot fire. Link the contact.",
+        ConvertIntentState.Paid when !CloseTagWritten =>
+            "Paid — waiting on the `close` tag write (runs every 5 min).",
+        ConvertIntentState.AwaitingPayment when ExpiresAt is { } e && e <= DateTimeOffset.UtcNow =>
+            "Payment window has lapsed — the next sweep will expire it.",
+        _ => null,
+    };
+}
+
 /// <summary>
 /// Operator writes for the Convert→Bill→Close wedge. A0 (this shell) does one thing:
 /// when a closer clicks "Convert to subscriber", record the human intent as a
@@ -152,6 +172,33 @@ public class ConvertService(IDbContextFactory<RdDbContext> factory, IClock clock
 
         var input = await LoadDraftInputAsync(db, client, intent.AccountType, intent.PackageId, ct);
         return new ActiveConvertDraft(intent.Id, intent.State, intent.CreatedAt, ConvertDrafter.Draft(input));
+    }
+
+    /// <summary>
+    /// Every conversion, newest first — the operator queue. Includes terminal ones so history is
+    /// visible; <see cref="ConversionRow.Attention"/> flags the ones actually needing a human
+    /// (expired unpaid, paid-but-no-GHL-contact, paid-awaiting-tag).
+    /// </summary>
+    public async Task<List<ConversionRow>> ListConversionsAsync(CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+
+        return await db.ConvertIntents.AsNoTracking()
+            .OrderByDescending(i => i.UpdatedAt)
+            .Select(i => new ConversionRow(
+                i.Id,
+                i.ClientId,
+                i.Client!.BusinessName,
+                i.State,
+                i.AccountType,
+                i.CreatedAt,
+                i.UpdatedAt,
+                i.ExpiresAt,
+                i.StripeSubscriptionId,
+                db.IdentityLinks.Any(l => l.ClientId == i.ClientId && l.System == ExternalSystem.Ghl
+                                          && l.Kind == LinkKind.Contact && l.InvalidatedAt == null),
+                i.CloseTagWrittenAt != null))
+            .ToListAsync(ct);
     }
 
     /// <summary>Snapshot the draft inputs from SQL projections for the pure <see cref="ConvertDrafter"/>. Shared with billing execute.</summary>

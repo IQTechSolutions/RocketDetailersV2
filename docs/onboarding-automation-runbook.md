@@ -72,8 +72,8 @@
 | # | Action | Where | Why |
 |---|---|---|---|
 | 0.1 | Create packages and **set a Stripe Price** on each | **Administration → Packages** (`/admin/packages`) | Without a Stripe Price the draft is blocked. This is the price the own-account service fee bills against. |
-| 0.2 | Confirm the client has a **linked GHL contact** | Mapping / Reconciliation | Without it, the `close` tag write silently never happens (see [Gap 2](#gap-2-close-write-silently-skips-clients-with-no-ghl-contact)). |
-| 0.3 | Confirm config flags | app config | See [Configuration](#5-configuration-reference). |
+| 0.2 | Confirm the client has a **linked GHL contact** | Mapping / Reconciliation | Without it the `close` tag can't be written; the job now raises an investigation and flags it in the Conversions queue rather than failing silently. |
+| 0.3 | Confirm config flags | app config | See [Configuration](#6-configuration-reference). |
 
 Setting a price **adds a new effective-dated `PackageVersion`** — it never rewrites history. Old conversions keep the price they were billed at.
 
@@ -205,7 +205,13 @@ Only **one active** (non-terminal) intent per client — enforced by a filtered 
 
 ---
 
-## 4. Background jobs
+## 4. Where operators watch it
+
+- **Conversions** (`/conversions`) — every conversion and what needs attention. The daily driver.
+- The client page's **Pending conversion** panel — the single client's draft + actions.
+- **Operations** — investigations raised by the close-write job.
+
+## 5. Background jobs
 
 | Job | Schedule | What it does |
 |---|---|---|
@@ -216,7 +222,7 @@ Only **one active** (non-terminal) intent per client — enforced by a filtered 
 
 ---
 
-## 5. Configuration reference
+## 6. Configuration reference
 
 | Key | Current | Effect |
 |---|---|---|
@@ -235,7 +241,7 @@ Only **one active** (non-terminal) intent per client — enforced by a filtered 
 
 ---
 
-## 6. What is still manual
+## 7. What is still manual
 
 - **Master-account (Meta-flagged) clients' billing** — their subscription covers *variable* ad spend, which a fixed Stripe Price can't express. Deferred to its own wedge (recorded in `TODOS.md`). The draft will tell you to handle it manually.
 - Sales call, vetting, FB page + ad account setup.
@@ -247,7 +253,7 @@ Only **one active** (non-terminal) intent per client — enforced by a filtered 
 
 ---
 
-## 7. Known gaps and operational warnings
+## 8. Known gaps and operational warnings (all three now fixed)
 
 ### Gap 1 — Double-billing a converted client — ✅ **FIXED** (`b6fc982`)
 
@@ -261,13 +267,29 @@ Only **one active** (non-terminal) intent per client — enforced by a filtered 
 - A client whose conversion was **`Reversed`** (billed, then canceled) now reads `Paid` and is **not** re-convertible. A deliberate re-subscribe needs an admin to reset `ContractType` — blocking is the safe default.
 - **`Expired`/`Failed`** conversions never paid, so those clients stay `Trial` and **can** be converted again. Correct: an unpaid conversion should be retryable.
 
-### Gap 2 — Close write silently skips clients with no GHL contact
+### Gap 2 — Paid conversion with no GHL contact — ✅ **FIXED**
 
-The close-write job only picks up intents where a GHL contact was resolved. A client **with no linked GHL contact** stays in `Paid` **forever**: the `close` tag is never written, onboarding never fires, and **no alert is raised**. Verify the GHL contact link exists (Step 0.2) before converting.
+**Was:** the close-write job only picked up conversions that already had a GHL contact resolved, so a client with no linked contact sat in `Paid` **forever** — no tag, no onboarding, no alert.
 
-### Gap 3 — No list view of conversions
+**Now** the job looks at *every* `Paid` conversion awaiting its tag and:
+1. **Self-heals** — re-resolves the GHL contact, so a contact linked *after* the payment landed is picked up on the next pass and the conversion completes normally.
+2. If there's still no contact, raises a **deduped investigation** (one open item per client, `UnmappedIdentity`, system GHL) reading *"Conversion is paid but the client has no linked GHL contact…"*, so it surfaces in the work queue instead of vanishing.
 
-Conversions are only visible on the individual client page. There is **no queue** of "awaiting payment", "expired/unpaid", or "stuck in Paid" across the book — so Gaps 1 and 2 are easy to miss at scale. The design called for a converted-but-unpaid list in the cockpit; it isn't built.
+The conversion stays `Paid` (correct — onboarding genuinely hasn't fired) and is flagged in the [Conversions queue](#conversions-queue).
+
+### Gap 3 — No list view of conversions — ✅ **FIXED**
+
+<a id="conversions-queue"></a>
+**Now:** a **Conversions** page (`/conversions`, in the main nav) lists every conversion newest-first — client, state, account type, start time, Stripe subscription — with a **"Needs attention"** column and a count in the header. It flags only what a human must act on:
+
+| Flag | Meaning |
+|---|---|
+| *Billed but never paid — expired.* | `Expired` — chase or re-convert |
+| *Paid but no GHL contact linked…* | onboarding can't fire — link the contact ([Gap 2](#gap-2--paid-conversion-with-no-ghl-contact--fixed)) |
+| *Paid — waiting on the `close` tag write…* | normal for <5 min; persistent means the job is off/blocked |
+| *Payment window has lapsed…* | the next hourly sweep will expire it |
+
+Healthy and completed conversions show no flag, so the queue stays signal, not noise. **Check this page daily** — it is where Gaps 1–2 would surface.
 
 ### Other notes
 
@@ -278,7 +300,7 @@ Conversions are only visible on the individual client page. There is **no queue*
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -288,13 +310,13 @@ Conversions are only visible on the individual client page. There is **no queue*
 | Draft shows *"USD-only"* | Client currency isn't USD | Out of scope for v1 |
 | Approve & bill says *"kill switch engaged"* | Global stop is on | Release it in Operations |
 | Stuck in `AwaitingPayment` | Client hasn't paid | Wait, or chase (dunning); it expires after 7 days |
-| Stuck in `Paid`, never `Closed` | Close-write disabled, kill switch on, no GHL contact ([Gap 2](#gap-2-close-write-silently-skips-clients-with-no-ghl-contact)), or GHL errors | Check `Convert:CloseTagWriteEnabled`, kill switch, the contact link, and the job logs |
+| Stuck in `Paid`, never `Closed` | Close-write disabled, kill switch on, no GHL contact, or GHL errors | Check the **Conversions** page for the reason, then `Convert:CloseTagWriteEnabled`, the kill switch, the contact link, and the job logs |
 | `Closed` but client reports no SMS | Zapier side | Check the Zap — the app's job ends at the tag write |
 | Client billed twice | Should now be prevented ([Gap 1](#gap-1--double-billing-a-converted-client--fixed-b6fc982)). If it still happens, cancel the duplicate subscription in Stripe and report it. |
 
 ---
 
-## 9. Where the code lives
+## 10. Where the code lives
 
 | Concern | File |
 |---|---|

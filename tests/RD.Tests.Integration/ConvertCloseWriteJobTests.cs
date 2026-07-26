@@ -108,6 +108,58 @@ public sealed class ConvertCloseWriteJobTests : IDisposable
         _server.LogEntries.Should().NotContain(e => e.RequestMessage.Path == "/contacts/ghl_c1/tags"); // no POST
     }
 
+    /// <summary>
+    /// Gap 2: a paid conversion whose client has NO GHL contact must not vanish. It raises an
+    /// investigation (deduped) so the stuck client is visible, instead of sitting in Paid forever.
+    /// </summary>
+    [Fact]
+    public async Task Paid_without_a_ghl_contact_raises_one_investigation_and_stays_paid()
+    {
+        var intentId = SeedPaidIntent(contactId: null);
+
+        await Job(enabled: true).RunAsync(CancellationToken.None);
+        await Job(enabled: true).RunAsync(CancellationToken.None); // second pass must not duplicate
+
+        await using var db = _db.CreateContext();
+        db.ConvertIntents.Single(i => i.Id == intentId).State.Should().Be(ConvertIntentState.Paid);
+        var items = db.InvestigationItems.Where(i => i.Status == InvestigationStatus.Open).ToList();
+        items.Should().ContainSingle();
+        items[0].Detail.Should().Contain("no linked GHL contact");
+        items[0].System.Should().Be(ExternalSystem.Ghl);
+        _server.LogEntries.Should().BeEmpty(); // never called GHL
+    }
+
+    /// <summary>
+    /// Self-heal: a GHL contact linked AFTER the payment landed is picked up on the next pass —
+    /// the conversion completes rather than needing a re-run of the payment.
+    /// </summary>
+    [Fact]
+    public async Task Contact_linked_after_payment_is_picked_up_on_the_next_pass()
+    {
+        var intentId = SeedPaidIntent(contactId: null);
+        Guid clientId;
+        using (var db = _db.CreateContext())
+        {
+            clientId = db.ConvertIntents.Single(i => i.Id == intentId).ClientId;
+            db.IdentityLinks.Add(new IdentityLink
+            {
+                Id = Guid.NewGuid(), ClientId = clientId, System = ExternalSystem.Ghl,
+                Kind = LinkKind.Contact, ExternalId = "ghl_late", CreatedAt = _clock.UtcNow,
+            });
+            db.SaveChanges();
+        }
+        StubTags("ghl_late", "trial");
+        _server.Given(Request.Create().WithPath("/contacts/ghl_late/tags").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+
+        await Job(enabled: true).RunAsync(CancellationToken.None);
+
+        await using var check = _db.CreateContext();
+        var intent = check.ConvertIntents.Single(i => i.Id == intentId);
+        intent.State.Should().Be(ConvertIntentState.Closed);
+        intent.CloseTagContactId.Should().Be("ghl_late");
+    }
+
     [Fact]
     public async Task Disabled_is_a_no_op_and_touches_no_ghl()
     {

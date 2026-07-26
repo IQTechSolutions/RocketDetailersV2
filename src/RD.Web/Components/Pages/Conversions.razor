@@ -1,0 +1,98 @@
+@page "/conversions"
+@attribute [Authorize]
+@using RD.Domain
+@using RD.Web.Services
+@inject ConvertService Convert
+
+<PageTitle>Conversions — Rocket Detailer Control Plane</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3" Wrap="Wrap.Wrap">
+    <MudIcon Icon="@Icons.Material.Filled.PointOfSale" Size="Size.Large" />
+    <MudText Typo="Typo.h5">Conversions</MudText>
+    <HelpHint Text="Every trial→subscriber conversion and where it is. Rows flagged in amber need a human: billed-but-unpaid, or paid but onboarding can't fire." />
+    <MudSpacer />
+    @if (_rows is not null)
+    {
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@(_needAttention > 0 ? Color.Warning : Color.Default)">
+            @_needAttention need attention
+        </MudChip>
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@_rows.Count total</MudChip>
+    }
+</MudStack>
+
+@if (_rows is null)
+{
+    <GridSkeleton Rows="6" />
+}
+else
+{
+    <MudPaper Elevation="1">
+        <MudDataGrid T="ConversionRow" Items="_rows" Dense="true" Hover="true" Elevation="0" Groupable="false">
+            <Columns>
+                <TemplateColumn Title="Client">
+                    <CellTemplate>
+                        <MudLink Href="@($"/clients/{context.Item.ClientId}")">@context.Item.BusinessName</MudLink>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="State">
+                    <CellTemplate>
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@StateColor(context.Item.State)">
+                            @context.Item.State
+                        </MudChip>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Account">
+                    <CellTemplate>@context.Item.AccountType</CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Started">
+                    <CellTemplate>@context.Item.CreatedAt.ToString("yyyy-MM-dd HH:mm")</CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Subscription">
+                    <CellTemplate>
+                        <MudText Typo="Typo.caption">@(context.Item.StripeSubscriptionId ?? "—")</MudText>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Needs attention" Sortable="false">
+                    <CellTemplate>
+                        @if (context.Item.Attention is { } why)
+                        {
+                            <MudTooltip Arrow="true" Text="@why">
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled"
+                                         Icon="@Icons.Material.Filled.PriorityHigh">@why</MudChip>
+                            </MudTooltip>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">—</MudText>
+                        }
+                    </CellTemplate>
+                </TemplateColumn>
+            </Columns>
+            <NoRecordsContent>
+                <EmptyState Icon="@Icons.Material.Outlined.PointOfSale" Title="No conversions yet"
+                            Hint="Convert a trial client from their client page to start one." />
+            </NoRecordsContent>
+        </MudDataGrid>
+    </MudPaper>
+}
+
+@code {
+    private List<ConversionRow>? _rows;
+    private int _needAttention;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _rows = await Convert.ListConversionsAsync();
+        _needAttention = _rows.Count(r => r.Attention is not null);
+    }
+
+    private static Color StateColor(ConvertIntentState state) => state switch
+    {
+        ConvertIntentState.Closed => Color.Success,
+        ConvertIntentState.Paid => Color.Info,
+        ConvertIntentState.AwaitingPayment => Color.Warning,
+        ConvertIntentState.Expired or ConvertIntentState.Failed => Color.Error,
+        ConvertIntentState.Reversed => Color.Default,
+        _ => Color.Default,
+    };
+}

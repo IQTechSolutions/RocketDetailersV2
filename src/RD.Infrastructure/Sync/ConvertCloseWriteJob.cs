@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RD.Domain;
+using RD.Domain.Entities;
 using RD.Infrastructure.Enforcement;
 using RD.Infrastructure.Gateways;
 
@@ -45,10 +46,11 @@ public sealed class ConvertCloseWriteJob(
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var now = clock.UtcNow;
 
+        // Every Paid conversion still awaiting its tag — INCLUDING ones with no contact resolved yet.
+        // Those must not be silently dropped: we re-resolve (the link may have been added after
+        // promotion) and, failing that, raise an investigation so a stuck client is visible.
         var pending = await db.ConvertIntents
-            .Where(i => i.State == ConvertIntentState.Paid
-                        && i.CloseTagWrittenAt == null
-                        && i.CloseTagContactId != null)
+            .Where(i => i.State == ConvertIntentState.Paid && i.CloseTagWrittenAt == null)
             .OrderBy(i => i.UpdatedAt)
             .Take(50)
             .ToListAsync(ct);
@@ -56,7 +58,26 @@ public sealed class ConvertCloseWriteJob(
         var written = 0;
         foreach (var intent in pending)
         {
-            var contactId = intent.CloseTagContactId!;
+            // Self-heal: a GHL contact linked after the payment landed is picked up here.
+            var contactId = intent.CloseTagContactId ?? await db.IdentityLinks
+                .Where(l => l.ClientId == intent.ClientId && l.System == ExternalSystem.Ghl
+                            && l.Kind == LinkKind.Contact && l.InvalidatedAt == null)
+                .Select(l => l.ExternalId)
+                .FirstOrDefaultAsync(ct);
+
+            if (string.IsNullOrEmpty(contactId))
+            {
+                // No GHL contact ⇒ onboarding can never fire for this paying client. Surface it
+                // (deduped) instead of leaving the conversion stuck in Paid forever, unnoticed.
+                await AddInvestigationOnceAsync(db, intent.ClientId,
+                    "Conversion is paid but the client has no linked GHL contact — the `close` tag can't be written, so onboarding will not fire.",
+                    now, ct);
+                await db.SaveChangesAsync(ct);
+                logger.LogWarning("close-write: conversion {IntentId} is Paid but has no GHL contact linked.", intent.Id);
+                continue;
+            }
+            intent.CloseTagContactId = contactId;
+
             try
             {
                 // Read-before-write: never re-add an already-present tag (would re-fire onboarding).
@@ -79,5 +100,26 @@ public sealed class ConvertCloseWriteJob(
         }
 
         if (written > 0) logger.LogInformation("Convert close-write tagged {Count} conversion(s) `close`.", written);
+    }
+
+    /// <summary>Raises one open investigation per client for this problem — repeated passes don't spam the queue.</summary>
+    private static async Task AddInvestigationOnceAsync(
+        RdDbContext db, Guid clientId, string detail, DateTimeOffset now, CancellationToken ct)
+    {
+        var exists = await db.InvestigationItems.AnyAsync(
+            i => i.ClientId == clientId
+                 && i.Kind == InvestigationKind.UnmappedIdentity
+                 && i.Status == InvestigationStatus.Open, ct);
+        if (exists) return;
+
+        db.InvestigationItems.Add(new InvestigationItem
+        {
+            Id = Guid.NewGuid(),
+            ClientId = clientId,
+            Kind = InvestigationKind.UnmappedIdentity,
+            Detail = detail,
+            System = ExternalSystem.Ghl,
+            CreatedAt = now,
+        });
     }
 }
