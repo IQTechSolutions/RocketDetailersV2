@@ -17,11 +17,19 @@ public sealed class SyncTestDb : IDisposable
     public DbContextOptions<RdDbContext> Options { get; }
     public IDbContextFactory<RdDbContext> Factory { get; }
 
+    /// <summary>
+    /// SQL Server to create throwaway test databases on. Defaults to LocalDB for developer machines;
+    /// CI sets <c>RD_TEST_SQL</c> (e.g. <c>localhost</c> or <c>(localdb)\MSSQLLocalDB</c>) so the suite
+    /// can run wherever a SQL instance is reachable instead of requiring LocalDB specifically.
+    /// </summary>
+    private static string TestServer =>
+        Environment.GetEnvironmentVariable("RD_TEST_SQL") is { Length: > 0 } s ? s : @"(localdb)\MSSQLLocalDB";
+
     public SyncTestDb()
     {
         DatabaseName = "RocketDetailers_Test_" + Guid.NewGuid().ToString("N");
         var connectionString =
-            $@"Server=(localdb)\MSSQLLocalDB;Database={DatabaseName};Trusted_Connection=True;MultipleActiveResultSets=true";
+            $@"Server={TestServer};Database={DatabaseName};Trusted_Connection=True;MultipleActiveResultSets=true;TrustServerCertificate=True";
 
         Options = new DbContextOptionsBuilder<RdDbContext>()
             .UseSqlServer(connectionString)
