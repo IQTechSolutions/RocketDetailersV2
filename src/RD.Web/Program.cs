@@ -2,6 +2,7 @@ using Hangfire;
 using Hangfire.Dashboard;
 using Hangfire.SqlServer;
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using MudBlazor.Services;
@@ -17,16 +18,27 @@ using RD.Web.Identity;
 using RD.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+var connectionString = builder.Configuration.GetConnectionString("RocketDetailers");
+if (string.IsNullOrWhiteSpace(connectionString))
+{
+    throw new InvalidOperationException(
+        "ConnectionStrings:RocketDetailers is required. Configure it with user-secrets or the " +
+        "ConnectionStrings__RocketDetailers environment variable.");
+}
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 builder.Services.AddMudServices();
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+});
 
 // Always query THROUGH the factory — Blazor circuits are long-lived and
 // concurrent; never inject RdDbContext directly. The append-only interceptor
 // rides along on every context the factory hands out.
 builder.Services.AddDbContextFactory<RdDbContext>(options => options
-    .UseSqlServer(builder.Configuration.GetConnectionString("RocketDetailers"))
+    .UseSqlServer(connectionString)
     .AddInterceptors(new AppendOnlyInterceptor()));
 
 // ── Identity: cookie auth + roles. Every state-changing enforcement control
@@ -82,7 +94,6 @@ builder.Services.AddSlack(builder.Configuration);
 
 // Hangfire: same SQL Server database, own schema; recurring jobs only — the
 // outbox dispatcher (M2) is the pump for external writes, never fire-and-forget.
-var connectionString = builder.Configuration.GetConnectionString("RocketDetailers");
 builder.Services.AddHangfire(cfg => cfg
     .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
     .UseSimpleAssemblyNameTypeSerializer()
@@ -104,6 +115,9 @@ using (var migrationScope = app.Services.CreateScope())
 }
 
 // Configure the HTTP request pipeline.
+// IIS ARR terminates TLS and proxies to the service over loopback. Apply its
+// forwarded scheme before HTTPS redirection so public HTTPS requests do not loop.
+app.UseForwardedHeaders();
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error", createScopeForErrors: true);
@@ -120,6 +134,15 @@ app.UseAntiforgery();
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
+
+// Reaching this endpoint proves startup, database migrations, Hangfire, and
+// identity seeding all completed. CI polls it after switching the live release.
+app.MapGet("/health", () => Results.Ok(new
+{
+    status = "ok",
+    service = "RD.Web",
+    version = typeof(Program).Assembly.GetName().Version?.ToString()
+})).AllowAnonymous();
 
 // Signature is verified over the raw body, so this endpoint reads bytes directly.
 app.MapStripeWebhook();
