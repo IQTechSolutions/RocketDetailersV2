@@ -280,9 +280,14 @@ public sealed class StripeWebhookIngestor(
     }
 
     /// <summary>
-    /// First-payment promotion: move the conversion AwaitingPayment → Paid and its client's active trial
-    /// Active → Promoted, so EligibilityPolicy stops suppressing enforcement (rule 4) with no drift window.
-    /// Runs in the caller's transaction. (The `close` GHL tag write is a later, spike-gated step.)
+    /// First-payment promotion, all in the caller's transaction:
+    ///   · the conversion AwaitingPayment|Expired → Paid
+    ///   · the client's active trial Active → Promoted, so EligibilityPolicy stops suppressing
+    ///     enforcement (rule 4) with no drift window
+    ///   · the CLIENT Trial → Paid — the client is now a paying subscriber, and this is what stops
+    ///     them being convertible (and therefore billable) a second time. ContractType is display +
+    ///     audit-snapshot only; no enforcement decision reads it, so this changes no policy behavior.
+    ///   · the GHL contact recorded as the `close`-write target
     /// </summary>
     private static async Task PromoteConversionAsync(RdDbContext db, string? subscriptionId, DateTimeOffset now, CancellationToken ct)
     {
@@ -304,6 +309,13 @@ public sealed class StripeWebhookIngestor(
             .FirstOrDefaultAsync(ct);
         if (trial is not null)
             trial.Outcome = TrialOutcome.Promoted;
+
+        // The client is a paying subscriber now. This also closes the double-billing hole: Convert
+        // requires ContractType.Trial, so a converted client can't be re-converted into a second
+        // live subscription once this flips.
+        var client = await db.Clients.FirstOrDefaultAsync(c => c.Id == intent.ClientId, ct);
+        if (client is not null)
+            client.ContractType = ContractType.Paid;
 
         // Shadow record for the (spike-gated) `close` tag write: resolve the client's GHL contact now.
         // No GHL call — this just captures the write target so the live write, when enabled, knows where

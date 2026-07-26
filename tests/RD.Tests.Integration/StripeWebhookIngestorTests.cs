@@ -251,6 +251,9 @@ public sealed class StripeWebhookIngestorTests : IDisposable
         Guid intentId;
         using (var seed = _db.CreateContext())
         {
+            // Start as a TRIAL client so the promotion's Trial → Paid flip is actually proven
+            // (the shared seed helper creates clients as Paid, which would pass trivially).
+            seed.Clients.Single(c => c.Id == clientId).ContractType = ContractType.Trial;
             var intent = new ConvertIntent
             {
                 Id = Guid.NewGuid(), ClientId = clientId, AccountType = AccountType.Own,
@@ -275,6 +278,8 @@ public sealed class StripeWebhookIngestorTests : IDisposable
         promoted.State.Should().Be(ConvertIntentState.Paid);
         promoted.CloseTagContactId.Should().Be("ghl_c1"); // Shadow record of the close-write target
         db.TrialPeriods.Single(t => t.ClientId == clientId).Outcome.Should().Be(TrialOutcome.Promoted);
+        // The client becomes a subscriber — this is what blocks a second conversion (double-billing).
+        db.Clients.Single(c => c.Id == clientId).ContractType.Should().Be(ContractType.Paid);
     }
 
     [Fact]

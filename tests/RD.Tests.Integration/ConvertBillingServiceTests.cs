@@ -163,6 +163,33 @@ public sealed class ConvertBillingServiceTests : IDisposable
         db.ConvertIntents.Single(i => i.Id == intentId).State.Should().Be(ConvertIntentState.Reversed);
     }
 
+    /// <summary>
+    /// The double-billing guard: a client with a completed (Paid/Closed) conversion must not be
+    /// convertible again — a second Convert would bill a SECOND live subscription under a different
+    /// idempotency key. Independent of ContractType so pre-fix data and drift are also caught.
+    /// </summary>
+    [Fact]
+    public async Task Convert_refuses_a_client_that_was_already_converted_and_billed()
+    {
+        var (clientId, _) = Seed(priceId: "price_1", withCustomerLink: true,
+            state: ConvertIntentState.Closed, subscriptionId: "sub_done");
+        // Force the pre-fix condition: client still reads Trial despite a completed conversion.
+        using (var db = _db.CreateContext())
+        {
+            db.Clients.Single(c => c.Id == clientId).ContractType = ContractType.Trial;
+            db.SaveChanges();
+        }
+
+        var convert = new ConvertService(_db.Factory, _clock);
+        var result = await convert.CreateIntentAsync(clientId, AccountType.Own, null, "op", CancellationToken.None);
+
+        result.Ok.Should().BeFalse();
+        result.Message.Should().Contain("already been converted");
+
+        await using var check = _db.CreateContext();
+        check.ConvertIntents.Count(i => i.ClientId == clientId).Should().Be(1); // no second intent
+    }
+
     [Fact]
     public async Task Cancel_refuses_when_nothing_has_been_billed()
     {

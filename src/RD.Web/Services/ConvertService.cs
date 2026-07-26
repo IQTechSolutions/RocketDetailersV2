@@ -81,6 +81,20 @@ public class ConvertService(IDbContextFactory<RdDbContext> factory, IClock clock
             return new ConvertResult(false, "A conversion is already in progress for this client.");
         }
 
+        // Double-billing guard, independent of ContractType. A completed conversion means this client
+        // already has a live subscription; converting again would create a SECOND one (a different
+        // idempotency key, so Stripe won't collapse it). Catches clients converted before ContractType
+        // was flipped on promotion, and any later data drift.
+        var alreadyConverted = await db.ConvertIntents.AnyAsync(
+            i => i.ClientId == clientId
+                 && (i.State == ConvertIntentState.Paid || i.State == ConvertIntentState.Closed), ct);
+        if (alreadyConverted)
+        {
+            await tx.RollbackAsync(ct);
+            return new ConvertResult(false,
+                "This client has already been converted and billed. Cancel the existing subscription first if you need to re-subscribe them.");
+        }
+
         // Write the account type through explicitly — never rely on the enum default.
         client.AccountType = accountType;
         var resolvedPackageId = packageId ?? client.PackageId;
