@@ -4,6 +4,15 @@ html, body {
     height: 100%;
 }
 
+/* MudBlazor 9's .mud-main-content clears the fixed app bar via padding-top:
+   var(--mud-appbar-height). That variable was resolving to empty in this app
+   (a MudBlazor version skew — see README/notes), so page content rendered UNDER
+   the app bar. Pin it to the standard height so every page sits below the bar.
+   64px = MudBlazor's default; the responsive rules derive mobile heights from it. */
+:root {
+    --mud-appbar-height: 64px;
+}
+
 code {
     font-family: Consolas, "Cascadia Mono", Menlo, monospace;
 }
