@@ -1,16 +1,5 @@
 name: CI / Deploy
 
-# Build + test on every push and PR. A merge to main additionally publishes a versioned
-# artifact and — after a MANUAL APPROVAL on the `live` environment — deploys it to IIS via a
-# self-hosted runner on the live box.
-#
-# NOTE: the app applies EF Core migrations on startup (Program.cs, db.Database.MigrateAsync()).
-# A live deploy therefore MIGRATES THE PRODUCTION DATABASE the moment the app pool restarts.
-# That is exactly why the deploy job is gated behind an approval rather than firing on merge.
-#
-# Secrets are NOT handled here by design: the live box owns its own configuration
-# (environment variables / user-secrets). This pipeline ships code only.
-
 on:
   push:
     branches: [main]
@@ -18,22 +7,23 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   DOTNET_VERSION: '10.0.x'
   DOTNET_NOLOGO: 'true'
   DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
 
-# Never let two live deploys overlap.
+# Build runs can overlap across branches, but a live release must never race
+# another main-branch release.
 concurrency:
   group: ci-cd-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  # ── Build, test, and (on main) package ────────────────────────────────────────
   build:
     name: Build & test
-    # Windows: the app is Windows/IIS-hosted and the integration suite needs a SQL Server
-    # instance (LocalDB on the hosted image).
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -51,16 +41,12 @@ jobs:
       - name: Build
         run: dotnet build --no-restore --configuration Release
 
-      # Pure unit tests — no database, always runnable.
       - name: Unit tests
         run: dotnet test tests/RD.Tests/RD.Tests.csproj --no-build --configuration Release --verbosity minimal
 
-      # Integration tests create/drop throwaway databases. Start LocalDB first; RD_TEST_SQL lets
-      # SyncTestDb target whatever instance exists (see TestInfra/SyncTestDb.cs).
       - name: Start LocalDB
         shell: pwsh
         run: |
-          sqllocaldb info
           sqllocaldb start MSSQLLocalDB
           sqllocaldb info MSSQLLocalDB
 
@@ -69,155 +55,221 @@ jobs:
           RD_TEST_SQL: '(localdb)\MSSQLLocalDB'
         run: dotnet test tests/RD.Tests.Integration/RD.Tests.Integration.csproj --no-build --configuration Release --verbosity minimal
 
-      # Only main produces something deployable.
-      - name: Publish web app
-        if: github.ref == 'refs/heads/main'
-        run: dotnet publish src/RD.Web/RD.Web.csproj --configuration Release --no-build --output publish
+      # A self-contained Windows artifact avoids coupling the live server to a
+      # separately installed .NET runtime.
+      - name: Publish Windows service artifact
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          dotnet publish src/RD.Web/RD.Web.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            --output publish
+          New-Item -ItemType Directory -Path publish\_deploy -Force | Out-Null
+          Copy-Item ops\Start-RocketDetailer.ps1 publish\_deploy\Start-RocketDetailer.ps1
 
       - name: Upload artifact
-        if: github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: rd-web-${{ github.sha }}
           path: publish/
+          if-no-files-found: error
           retention-days: 14
 
-  # ── Deploy to live (manual approval required) ─────────────────────────────────
   deploy-live:
-    name: Deploy to live (IIS)
+    name: Deploy to live service
     needs: build
-    if: github.ref == 'refs/heads/main'
-    # The `live` environment carries the required-reviewer rule. Until someone approves,
-    # this job waits and nothing touches production.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment:
       name: live
       url: ${{ vars.LIVE_URL }}
-    # A runner installed on (or beside) the live box — no inbound access or VPN auth needed.
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, windows, live]
     timeout-minutes: 20
 
     steps:
-      - name: Check required configuration
+      - name: Check deployment configuration
         shell: pwsh
+        env:
+          LIVE_CONNECTION_STRING: ${{ secrets.LIVE_CONNECTION_STRING }}
         run: |
           $missing = @()
-          if (-not "${{ vars.IIS_APP_POOL }}")      { $missing += 'IIS_APP_POOL' }
-          if (-not "${{ vars.IIS_PHYSICAL_PATH }}") { $missing += 'IIS_PHYSICAL_PATH' }
+          if (-not '${{ vars.APP_ROOT }}')        { $missing += 'APP_ROOT variable' }
+          if (-not '${{ vars.WINDOWS_SERVICE }}') { $missing += 'WINDOWS_SERVICE variable' }
+          if (-not '${{ vars.LIVE_URL }}')         { $missing += 'LIVE_URL variable' }
+          if (-not $env:LIVE_CONNECTION_STRING)    { $missing += 'LIVE_CONNECTION_STRING environment secret' }
           if ($missing.Count) {
-            Write-Error ("Missing repository variables: " + ($missing -join ', ') +
-              ". Set them under Settings > Secrets and variables > Actions > Variables.")
-            exit 1
+            throw "Missing live configuration: $($missing -join ', ')"
           }
-          Write-Host "Target: ${{ vars.IIS_PHYSICAL_PATH }} (app pool ${{ vars.IIS_APP_POOL }})"
 
-      # Deploy exactly the bits that were tested, not a fresh build.
+          $service = Get-Service -Name '${{ vars.WINDOWS_SERVICE }}' -ErrorAction Stop
+          Write-Host "Deploying to ${{ vars.APP_ROOT }} through service $($service.Name)."
+
+      # Deploy the exact artifact built and tested above, never a rebuild on the
+      # production machine.
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           name: rd-web-${{ github.sha }}
           path: publish
 
-      - name: Back up current deployment
+      - name: Stage immutable release
         shell: pwsh
         run: |
-          $site = '${{ vars.IIS_PHYSICAL_PATH }}'
-          if (Test-Path $site) {
-            $backupRoot = Join-Path $env:RUNNER_TEMP 'rd-backups'
-            New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
-            $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-            $dest = Join-Path $backupRoot "rdweb-$stamp"
-            Write-Host "Backing up $site -> $dest"
-            robocopy $site $dest /E /NFL /NDL /NJH /NJS /R:2 /W:2 | Out-Null
-            if ($LASTEXITCODE -ge 8) { Write-Error "Backup failed (robocopy $LASTEXITCODE)"; exit 1 }
-            Write-Output "BACKUP_PATH=$dest" >> $env:GITHUB_ENV
-          } else {
-            Write-Host "No existing deployment at $site — first deploy."
+          $root = '${{ vars.APP_ROOT }}'
+          $releaseId = '${{ github.sha }}-${{ github.run_attempt }}'
+          $release = Join-Path (Join-Path $root 'releases') $releaseId
+
+          if (Test-Path -LiteralPath $release) {
+            throw "Release path already exists: $release"
           }
 
-      # app_offline.htm makes IIS drain and shut the app down, releasing the locked DLLs.
-      - name: Take the site offline
-        shell: pwsh
-        run: |
-          $site = '${{ vars.IIS_PHYSICAL_PATH }}'
-          New-Item -ItemType Directory -Force -Path $site | Out-Null
-          @'
-          <!doctype html><html><head><title>Updating</title></head>
-          <body style="font-family:system-ui;padding:3rem">
-          <h1>Updating</h1><p>The control plane is being updated and will be back shortly.</p>
-          </body></html>
-          '@ | Set-Content -Path (Join-Path $site 'app_offline.htm') -Encoding utf8
-          Start-Sleep -Seconds 5
-
-      - name: Copy files
-        shell: pwsh
-        run: |
-          $src  = Join-Path $PWD 'publish'
-          $dest = '${{ vars.IIS_PHYSICAL_PATH }}'
-          # /MIR mirrors the publish output. Excluded from deletion/overwrite:
-          #   app_offline.htm            - we manage it in this job
-          #   appsettings.Production.json - live config owned by the box, never shipped from git
-          #   logs, App_Data             - runtime state
-          robocopy $src $dest /MIR /NFL /NDL /NJH /NJS /R:3 /W:3 `
-            /XF app_offline.htm appsettings.Production.json `
-            /XD logs App_Data
-          if ($LASTEXITCODE -ge 8) { Write-Error "Copy failed (robocopy $LASTEXITCODE)"; exit 1 }
-          Write-Host "Copy OK (robocopy $LASTEXITCODE)"
-
-      - name: Recycle the app pool
-        shell: pwsh
-        run: |
-          Import-Module WebAdministration -ErrorAction Stop
-          $pool = '${{ vars.IIS_APP_POOL }}'
-          if ((Get-WebAppPoolState -Name $pool).Value -ne 'Stopped') {
-            Stop-WebAppPool -Name $pool
-            Start-Sleep -Seconds 3
+          New-Item -ItemType Directory -Path $release -Force | Out-Null
+          robocopy (Join-Path $PWD 'publish') $release /MIR /R:3 /W:3 /NFL /NDL /NJH /NJS /XD _deploy
+          if ($LASTEXITCODE -ge 8) {
+            throw "Staging failed (robocopy exit code $LASTEXITCODE)"
           }
-          Start-WebAppPool -Name $pool
-          Write-Host "App pool '$pool' started."
-
-      - name: Bring the site online
-        shell: pwsh
-        run: |
-          Remove-Item -Path (Join-Path '${{ vars.IIS_PHYSICAL_PATH }}' 'app_offline.htm') -Force -ErrorAction SilentlyContinue
-          Write-Host "app_offline.htm removed."
-
-      # First request triggers startup, which applies any pending EF migrations.
-      - name: Health check
-        if: vars.LIVE_URL != ''
-        shell: pwsh
-        run: |
-          $url = '${{ vars.LIVE_URL }}'
-          $ok = $false
-          foreach ($attempt in 1..10) {
-            try {
-              $r = Invoke-WebRequest -Uri $url -TimeoutSec 30 -UseBasicParsing
-              if ($r.StatusCode -lt 400) { Write-Host "Healthy ($($r.StatusCode)) on attempt $attempt"; $ok = $true; break }
-              Write-Host "Attempt ${attempt}: HTTP $($r.StatusCode)"
-            } catch {
-              Write-Host "Attempt ${attempt}: $($_.Exception.Message)"
-            }
-            Start-Sleep -Seconds 10
+          if (-not (Test-Path -LiteralPath (Join-Path $release 'RD.Web.exe') -PathType Leaf)) {
+            throw 'Published RD.Web.exe is missing.'
           }
-          if (-not $ok) { Write-Error "Site did not come back healthy at $url"; exit 1 }
 
-      - name: Roll back on failure
-        if: failure() && env.BACKUP_PATH != ''
+          $launcher = Join-Path $PWD 'publish\_deploy\Start-RocketDetailer.ps1'
+          $parseErrors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            $launcher, [ref]$null, [ref]$parseErrors)
+          if ($parseErrors.Count) {
+            throw "Launcher is invalid: $($parseErrors -join '; ')"
+          }
+
+          "RELEASE_PATH=$release" >> $env:GITHUB_ENV
+          Write-Host "Staged release $releaseId."
+
+      - name: Configure live service
+        shell: pwsh
+        env:
+          LIVE_CONNECTION_STRING: ${{ secrets.LIVE_CONNECTION_STRING }}
+        run: |
+          $root = '${{ vars.APP_ROOT }}'
+          $secrets = Join-Path $env:ProgramData 'RocketDetailer\secrets'
+          $configPath = Join-Path $secrets 'dotnet.application.environment.json'
+          $configTemp = "$configPath.new"
+          $launcherSource = Join-Path $PWD 'publish\_deploy\Start-RocketDetailer.ps1'
+          $launcherTarget = Join-Path $root 'shared\service\Start-RocketDetailer.ps1'
+
+          New-Item -ItemType Directory -Path $secrets -Force | Out-Null
+          @{
+            ConnectionStrings__RocketDetailers = $env:LIVE_CONNECTION_STRING
+          } | ConvertTo-Json | Set-Content -LiteralPath $configTemp -Encoding utf8
+          Move-Item -LiteralPath $configTemp -Destination $configPath -Force
+
+          $launcherBackup = "$launcherTarget.pre-dotnet"
+          if (-not (Test-Path -LiteralPath $launcherBackup) -and
+              (Test-Path -LiteralPath $launcherTarget)) {
+            Copy-Item -LiteralPath $launcherTarget -Destination $launcherBackup
+          }
+          Copy-Item -LiteralPath $launcherSource -Destination $launcherTarget -Force
+          Write-Host 'External configuration and dual-runtime launcher are ready.'
+
+      - name: Switch release and restart service
         shell: pwsh
         run: |
-          Write-Warning "Deploy failed — restoring $env:BACKUP_PATH"
-          robocopy $env:BACKUP_PATH '${{ vars.IIS_PHYSICAL_PATH }}' /MIR /NFL /NDL /NJH /NJS /R:2 /W:2 /XF app_offline.htm | Out-Null
+          $root = '${{ vars.APP_ROOT }}'
+          $current = Join-Path $root 'current'
+          $service = '${{ vars.WINDOWS_SERVICE }}'
+          $previous = $null
+
+          Stop-Service -Name $service -Force -ErrorAction Stop
+
           try {
-            Import-Module WebAdministration -ErrorAction Stop
-            Restart-WebAppPool -Name '${{ vars.IIS_APP_POOL }}'
-          } catch { Write-Warning "Could not recycle app pool during rollback: $_" }
-          Remove-Item -Path (Join-Path '${{ vars.IIS_PHYSICAL_PATH }}' 'app_offline.htm') -Force -ErrorAction SilentlyContinue
-          Write-Warning "Rollback complete. NOTE: database migrations are NOT rolled back."
+            if (Test-Path -LiteralPath $current) {
+              $currentItem = Get-Item -LiteralPath $current -Force
+              if ($currentItem.LinkType -in @('Junction', 'SymbolicLink')) {
+                $previous = [string]$currentItem.Target
+                Remove-Item -LiteralPath $current -Force
+              } else {
+                $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+                $previous = Join-Path $root "current.rollback.$stamp"
+                Move-Item -LiteralPath $current -Destination $previous
+              }
+            }
 
-      - name: Summary
+            New-Item -ItemType Junction -Path $current -Target $env:RELEASE_PATH | Out-Null
+            "PREVIOUS_RELEASE=$previous" >> $env:GITHUB_ENV
+            "SWITCHED=true" >> $env:GITHUB_ENV
+
+            Start-Service -Name $service -ErrorAction Stop
+            Write-Host "Service started from $env:RELEASE_PATH."
+          } catch {
+            Write-Warning "Release switch failed: $_"
+            if (-not (Test-Path -LiteralPath $current) -and
+                $previous -and (Test-Path -LiteralPath $previous)) {
+              New-Item -ItemType Junction -Path $current -Target $previous | Out-Null
+            }
+            Start-Service -Name $service -ErrorAction SilentlyContinue
+            throw
+          }
+
+      - name: Verify live health
+        shell: pwsh
+        run: |
+          $urls = @(
+            'http://127.0.0.1:3000/health',
+            '${{ vars.LIVE_URL }}'
+          )
+
+          foreach ($url in $urls) {
+            $healthy = $false
+            foreach ($attempt in 1..18) {
+              try {
+                $response = Invoke-WebRequest -Uri $url -TimeoutSec 20 -UseBasicParsing
+                if ($response.StatusCode -eq 200) {
+                  Write-Host "Healthy: $url (attempt $attempt)"
+                  $healthy = $true
+                  break
+                }
+              } catch {
+                Write-Host "Attempt ${attempt} for ${url}: $($_.Exception.Message)"
+              }
+              Start-Sleep -Seconds 10
+            }
+            if (-not $healthy) {
+              throw "Health check failed: $url"
+            }
+          }
+
+      - name: Roll back failed release
+        if: failure() && env.SWITCHED == 'true'
+        shell: pwsh
+        run: |
+          $root = '${{ vars.APP_ROOT }}'
+          $current = Join-Path $root 'current'
+          $service = '${{ vars.WINDOWS_SERVICE }}'
+
+          Write-Warning "Deployment failed; restoring $env:PREVIOUS_RELEASE"
+          Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
+          if (Test-Path -LiteralPath $current) {
+            $currentItem = Get-Item -LiteralPath $current -Force
+            if ($currentItem.LinkType -notin @('Junction', 'SymbolicLink')) {
+              throw "Refusing rollback because $current is not a link."
+            }
+            Remove-Item -LiteralPath $current -Force
+          }
+          if (-not $env:PREVIOUS_RELEASE -or
+              -not (Test-Path -LiteralPath $env:PREVIOUS_RELEASE)) {
+            throw 'The previous release path is unavailable; manual recovery is required.'
+          }
+
+          New-Item -ItemType Junction -Path $current -Target $env:PREVIOUS_RELEASE | Out-Null
+          Start-Service -Name $service -ErrorAction Stop
+          Write-Warning 'File rollback completed. Database migrations are not rolled back.'
+
+      - name: Deployment summary
         if: always()
         shell: pwsh
         run: |
-          "## Live deploy" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "- Commit: ``${{ github.sha }}``" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "- Target: ``${{ vars.IIS_PHYSICAL_PATH }}``" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "- Result: ${{ job.status }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "## Live deployment" >> $env:GITHUB_STEP_SUMMARY
+          "- Commit: ``${{ github.sha }}``" >> $env:GITHUB_STEP_SUMMARY
+          "- Release: ``$env:RELEASE_PATH``" >> $env:GITHUB_STEP_SUMMARY
+          "- Service: ``${{ vars.WINDOWS_SERVICE }}``" >> $env:GITHUB_STEP_SUMMARY
+          "- Result: ${{ job.status }}" >> $env:GITHUB_STEP_SUMMARY
