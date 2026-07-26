@@ -249,14 +249,17 @@ Only **one active** (non-terminal) intent per client — enforced by a filtered 
 
 ## 7. Known gaps and operational warnings
 
-### Gap 1 — A converted client can be converted (and billed) a second time ⚠️ **money risk**
+### Gap 1 — Double-billing a converted client — ✅ **FIXED** (`b6fc982`)
 
-**Nothing sets `Client.ContractType = Paid` after a conversion completes.** Consequences:
-- The **Convert… button stays visible** on a fully converted client.
-- The `ContractType != Trial` guard never fires, so a second `ConvertIntent` can be created once the first is terminal (`Closed`).
-- **Approve & bill** on that second intent uses a *different* idempotency key → **a second live Stripe subscription → the client is billed twice.**
+**Was:** nothing set `Client.ContractType = Paid` after a conversion, so the Convert button stayed visible, the `ContractType != Trial` guard never fired, and once the first intent went terminal a second Convert could create a **second live Stripe subscription** (different idempotency key, so Stripe won't collapse it) — billing the client twice.
 
-It takes two deliberate human clicks, but nothing prevents it and the UI invites it. **Until fixed: do not click Convert on a client who already shows a completed conversion.** Fix = flip `ContractType` to `Paid` on promotion (and hide/guard the button accordingly).
+**Now, two layers:**
+1. The first-payment promotion flips the client **Trial → Paid** in the same transaction as the intent/trial promotion. The Convert button hides itself and the `ContractType` guard bites. (`ContractType` is display + audit-snapshot only — `EligibilityPolicy` never branches on it — so this changed no enforcement behavior.)
+2. A `ContractType`-independent guard in `CreateIntentAsync`: **refuse when the client already has a `Paid`/`Closed` intent.** This catches any client converted *before* the fix (who still reads `Trial`) and any later data drift.
+
+**Side effects worth knowing:**
+- A client whose conversion was **`Reversed`** (billed, then canceled) now reads `Paid` and is **not** re-convertible. A deliberate re-subscribe needs an admin to reset `ContractType` — blocking is the safe default.
+- **`Expired`/`Failed`** conversions never paid, so those clients stay `Trial` and **can** be converted again. Correct: an unpaid conversion should be retryable.
 
 ### Gap 2 — Close write silently skips clients with no GHL contact
 
@@ -287,7 +290,7 @@ Conversions are only visible on the individual client page. There is **no queue*
 | Stuck in `AwaitingPayment` | Client hasn't paid | Wait, or chase (dunning); it expires after 7 days |
 | Stuck in `Paid`, never `Closed` | Close-write disabled, kill switch on, no GHL contact ([Gap 2](#gap-2-close-write-silently-skips-clients-with-no-ghl-contact)), or GHL errors | Check `Convert:CloseTagWriteEnabled`, kill switch, the contact link, and the job logs |
 | `Closed` but client reports no SMS | Zapier side | Check the Zap — the app's job ends at the tag write |
-| Client billed twice | [Gap 1](#gap-1--a-converted-client-can-be-converted-and-billed-a-second-time--money-risk) | Cancel the duplicate subscription in Stripe / via Cancel subscription |
+| Client billed twice | Should now be prevented ([Gap 1](#gap-1--double-billing-a-converted-client--fixed-b6fc982)). If it still happens, cancel the duplicate subscription in Stripe and report it. |
 
 ---
 
