@@ -127,9 +127,13 @@ jobs:
 
           New-Item -ItemType Directory -Path $release -Force | Out-Null
           robocopy (Join-Path $PWD 'publish') $release /MIR /R:3 /W:3 /NFL /NDL /NJH /NJS /XD _deploy
-          if ($LASTEXITCODE -ge 8) {
-            throw "Staging failed (robocopy exit code $LASTEXITCODE)"
+          $robocopyExitCode = $LASTEXITCODE
+          if ($robocopyExitCode -ge 8) {
+            throw "Staging failed (robocopy exit code $robocopyExitCode)"
           }
+          # Robocopy uses 1-7 for successful copy conditions. Do not let that
+          # successful native status become powershell.exe's process exit code.
+          $global:LASTEXITCODE = 0
           if (-not (Test-Path -LiteralPath (Join-Path $release 'RD.Web.exe') -PathType Leaf)) {
             throw 'Published RD.Web.exe is missing.'
           }
