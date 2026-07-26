@@ -95,7 +95,12 @@ In the dialog:
 - Writes the chosen **`AccountType` through to the Client record** (never left to the enum default).
 - Computes the draft — the exact Stripe action it *would* take — **without calling Stripe**.
 
-**Guards that will refuse the click:** client not found, client is a merged/retired duplicate, client is not a Trial, or a conversion is already in flight (one active intent per client).
+**Guards that will refuse the click:**
+- client not found;
+- client is a merged/retired duplicate → convert the survivor;
+- client is not a `Trial` → *"already a subscriber"*;
+- a conversion is already in flight (one active intent per client);
+- the client **already has a completed (`Paid`/`Closed`) conversion** → *"already been converted and billed"*. This is the double-billing guard and it works even if `ContractType` is stale.
 
 ### Step 3 — Review the draft (human, in the app)
 
@@ -138,6 +143,7 @@ In **one transaction**, the app:
 - Correlates the invoice to the conversion via the **subscription id**.
 - Moves the intent **`AwaitingPayment` → `Paid`** (also recovers **`Expired` → `Paid`**, see Step 6).
 - Moves the client's active `TrialPeriod` to **`Promoted`** — so `EligibilityPolicy` stops suppressing enforcement and billing enforcement takes over with no gap.
+- Flips the **Client `Trial` → `Paid`** — they're a subscriber now. This also hides the Convert button and arms the guard that stops a second conversion (and a second charge). `ContractType` is display + audit-snapshot only, so no enforcement decision changes.
 - Records the client's **GHL contact** as the `close`-write target.
 - Writes the money-in ledger entry (as before).
 
@@ -157,11 +163,15 @@ Conversions sitting in `AwaitingPayment` past their `ExpiresAt` (7 days) move to
 **When:** within 5 minutes of the payment (`convert-close-write` job).
 **Where:** GHL.
 
-For each `Paid` conversion with a GHL contact and no write yet:
-1. **GET** the contact's tags.
-2. **Skip the write if `close` is already present** (mandatory — GHL does not guarantee re-adding a tag is a no-op, and a re-add would double-fire onboarding).
-3. Otherwise **POST** `{"tags":["close"]}`.
-4. Move the intent to **`Closed`**.
+For each `Paid` conversion still awaiting its tag:
+1. **Resolve the GHL contact** — using the one recorded at payment, or re-resolving now (so a contact linked *after* the payment is picked up automatically).
+   - **No contact at all?** Raise a deduped investigation (*"paid but no linked GHL contact"*) and leave it `Paid`. It shows in the Conversions queue and Operations rather than disappearing.
+2. **GET** the contact's tags.
+3. **Skip the write if `close` is already present** (mandatory — GHL does not guarantee re-adding a tag is a no-op, and a re-add would double-fire onboarding).
+4. Otherwise **POST** `{"tags":["close"]}`.
+5. Move the intent to **`Closed`**.
+
+A GHL error leaves the conversion `Paid` and the next pass retries; one bad contact never stalls the batch.
 
 Adding `close` fires the published GHL workflow **"Tag Closed → Send Webhook to Zapier"**, and Zapier does the actual onboarding (sub-account creation + welcome SMS).
 
