@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 Format: `## [MAJOR.MINOR.PATCH.MICRO] - YYYY-MM-DD` with Added / Changed / Fixed / Removed sections.
 
+## [Unreleased]
+
+### Added
+
+- Forgot-password self-service: a locked-out operator can request an emailed reset link from the sign-in page and choose a new password, instead of needing an Admin to set one by hand. The flow never reveals which addresses have accounts — requesting a link looks identical for a real and an unknown address — links are single-use and expire in two hours, and repeat requests for the same address are throttled so the anonymous endpoint can't be used to flood an inbox. Completing a reset also clears a lockout earned by failed sign-ins (the usual reason people end up here) while leaving a deliberate Admin lockout in place.
+- SMTP sender for transactional email (`Email:*` configuration). Where the relay isn't configured, the forgot-password page says so and points at the Admin reset path rather than promising an email that will never arrive.
+
 ## [0.0.0.5] - 2026-07-24
 
 ### Added
