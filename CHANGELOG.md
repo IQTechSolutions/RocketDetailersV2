@@ -4,7 +4,12 @@ All notable changes to this project are documented in this file.
 
 Format: `## [MAJOR.MINOR.PATCH.MICRO] - YYYY-MM-DD` with Added / Changed / Fixed / Removed sections.
 
-## [Unreleased]
+## [0.0.1.0] - 2026-08-05
+
+### Fixed
+
+- The cockpit's first-run card no longer tells every deployment it has 646 imported clients. That number was baked into the copy, so a brand-new install read "your 646 imported clients are here" directly above "0 of 0 clients linked". The card now reports the real roster size, reads correctly when there is exactly one client, and on an empty install says plainly that nothing has been imported yet.
+- On an empty install the same card sent operators to the mappings screen, which has nothing to reconcile before any clients exist. It now shows the one-time seed-import command instead, including the `--conn` argument — without it the importer loads the client roster into a local workstation database and still reports success, leaving the real database empty.
 
 ### Added
 

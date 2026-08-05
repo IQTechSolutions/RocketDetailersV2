@@ -55,6 +55,61 @@ public class CockpitRenderTests : BunitContext, IAsyncLifetime
     }
 
     [Fact]
+    public void FirstRun_import_summary_uses_the_real_client_count()
+    {
+        var cut = Render<CockpitFirstRun>(p => p.Add(x => x.Snapshot, FirstRunSnapshot(linked: 4, total: 12)));
+
+        cut.Markup.Should().Contain("Your 12 imported clients are here");
+    }
+
+    [Fact]
+    public void FirstRun_import_summary_reads_sensibly_on_an_empty_deployment()
+    {
+        var cut = Render<CockpitFirstRun>(p => p.Add(x => x.Snapshot, FirstRunSnapshot(linked: 0, total: 0)));
+
+        cut.Markup.Should().Contain("No clients have been imported yet");
+        cut.Markup.Should().NotContain("imported clients are here");
+        cut.Markup.Should().Contain("0 of 0 clients linked");
+
+        // The divide-by-zero guard: an empty roster must render an empty bar, not NaN.
+        cut.Find("[role=progressbar]").GetAttribute("aria-valuenow").Should().Be("0");
+    }
+
+    [Fact]
+    public void FirstRun_empty_deployment_points_at_importing_not_reconciliation()
+    {
+        var cut = Render<CockpitFirstRun>(p => p.Add(x => x.Snapshot, FirstRunSnapshot(linked: 0, total: 0)));
+
+        // Nothing to reconcile on an empty install — the mappings CTA must be gone.
+        cut.FindAll("a[href='/reconciliation']").Should().BeEmpty();
+        cut.Markup.Should().NotContain("fix identity mappings");
+
+        cut.Markup.Should().Contain("import the client roster");
+
+        // --conn must stay in the displayed command: without it the importer silently
+        // loads the roster into a local LocalDB and reports success (Program.cs:83).
+        cut.Find("code").TextContent.Should()
+            .Be("dotnet run --project src/RD.Tools.Import -- \"<xlsx path>\" --conn \"<connection string>\"");
+    }
+
+    [Fact]
+    public void FirstRun_keeps_the_mappings_CTA_once_clients_exist()
+    {
+        var cut = Render<CockpitFirstRun>(p => p.Add(x => x.Snapshot, FirstRunSnapshot(linked: 0, total: 12)));
+
+        cut.Find("a[href='/reconciliation']").TextContent.Should().Contain("Start here — fix mappings");
+        cut.FindAll("code").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void FirstRun_import_summary_is_singular_for_one_client()
+    {
+        var cut = Render<CockpitFirstRun>(p => p.Add(x => x.Snapshot, FirstRunSnapshot(linked: 0, total: 1)));
+
+        cut.Markup.Should().Contain("Your 1 imported client is here");
+    }
+
+    [Fact]
     public void FirstRun_progress_bar_reflects_linked_ratio()
     {
         var cut = Render<CockpitFirstRun>(p => p.Add(x => x.Snapshot, FirstRunSnapshot(linked: 323, total: 646)));

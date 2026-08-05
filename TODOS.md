@@ -87,6 +87,32 @@ Deferred work with context. Nothing here is forgotten — it is deliberately seq
 **Priority:** P1
 **Depends on:** Owner availability
 
+## Cockpit
+
+### Linked-client count can exceed the total (merged-client filter asymmetry)
+
+**What:** Filter `clientsLinked` on `MergedIntoClientId == null`, the way `totalClients`, `campaignsLive`, and the ledger roll-up already are.
+
+**Why:** `CockpitStateService.LoadAsync` counts `totalClients` excluding merged duplicates but counts `clientsLinked` straight off `IdentityLinks` with no join back to `Clients`. A merged-away duplicate that still carries an active Stripe subscription link is counted as linked but not as a total, so the first-run card can read "12 of 10 clients linked" and `_percent` can push the progress bar past 100%. Live-relevant: the deployment uses the client-merge feature.
+
+**Context:** Found by cross-model adversarial review during the 0.0.1.0 ship (2026-08-05). Pre-existing, not introduced by that change. Needs a regression test proving a merged client with an active subscription link does not inflate the linked count. (`src/RD.Web/Services/CockpitStateService.cs`)
+
+**Effort:** S (human ~1h / CC ~15min)
+**Priority:** P2
+**Depends on:** —
+
+### Empty-roster guidance disappears after the first sync
+
+**What:** Keep the "import your client roster" step reachable on a deployment that has zero clients, regardless of sync history.
+
+**Why:** `CockpitRules.Compute` decides `CockpitState.FirstRun` solely on `CompletedSyncRuns.Count == 0`, and `Cockpit.razor` only renders `CockpitFirstRun` in that state. The scheduled Stripe/Meta jobs complete fine against an empty roster, so the first sync retires the onboarding card permanently — a fresh install that sits one sync interval before anyone logs in never sees the import step, and gets a KPI row or Stale banner over an empty database instead.
+
+**Context:** Found by cross-model adversarial review during the 0.0.1.0 ship (2026-08-05), which added the empty-state import CTA to that card. Either make the state ladder roster-aware or surface an empty-roster banner in the non-FirstRun branch. Note the render tests mount `CockpitFirstRun` directly and cannot catch state-routing regressions — cover this at the `CockpitRules` level. (`src/RD.Web/Services/CockpitRules.cs`, `src/RD.Web/Components/Pages/Cockpit.razor`)
+
+**Effort:** S (human ~2h / CC ~20min)
+**Priority:** P3
+**Depends on:** —
+
 ## Completed
 
 _(none yet)_

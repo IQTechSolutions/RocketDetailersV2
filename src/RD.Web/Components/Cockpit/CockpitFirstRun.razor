@@ -8,8 +8,7 @@
         </MudStack>
 
         <MudText Typo="Typo.body1" Class="mud-text-secondary">
-            Your 646 imported clients are here, but no sync has completed yet, so money numbers aren't live.
-            The best first move: fix identity mappings — billing can only protect clients whose Stripe subscription is linked.
+            @_importSummary @_nextStep
         </MudText>
 
         <div>
@@ -24,16 +23,54 @@
         </div>
 
         <div>
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
-                       StartIcon="@Icons.Material.Filled.Build" Href="/reconciliation">
-                Start here — fix mappings
-            </MudButton>
+            @if (_isEmpty)
+            {
+                @* There is no in-app import surface — the roster load is a one-time
+                   CLI seed run (src/RD.Tools.Import, disposable by design), so the
+                   empty state hands over the command instead of linking nowhere. *@
+                <MudText Typo="Typo.subtitle2">Start here — import the client roster</MudText>
+                <code style="font-size:.78rem;display:inline-block;" class="my-2">@SeedImportCommand</code>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">
+                    A one-time seed load of the reconciliation spreadsheet, run from a repo checkout with the .NET SDK —
+                    the importer is not part of this deployment. Point <code>--conn</code> at this environment's database:
+                    omit it and the tool reports success after loading into a local LocalDB instead. Reload this page once it finishes.
+                </MudText>
+            }
+            else
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                           StartIcon="@Icons.Material.Filled.Build" Href="/reconciliation">
+                    Start here — fix mappings
+                </MudButton>
+            }
         </div>
     </MudStack>
 </MudPaper>
 
 @code {
     [Parameter, EditorRequired] public CockpitSnapshot Snapshot { get; set; } = default!;
+
+    /// <summary>
+    /// The documented seed-import usage (see RD.Tools.Import/Program.cs). <c>--conn</c> is shown
+    /// deliberately: the importer silently falls back to a local LocalDB instance without it.
+    /// </summary>
+    private const string SeedImportCommand =
+        "dotnet run --project src/RD.Tools.Import -- \"<xlsx path>\" --conn \"<connection string>\"";
+
+    // A brand-new deployment has no clients at all — nothing to reconcile and no
+    // roster to describe — so both the framing and the next step have to change.
+    private bool _isEmpty => Snapshot.TotalClients == 0;
+
+    private string _importSummary => Snapshot.TotalClients switch
+    {
+        0 => "No clients have been imported yet, and no sync has completed, so money numbers aren't live.",
+        1 => "Your 1 imported client is here, but no sync has completed yet, so money numbers aren't live.",
+        var n => $"Your {n} imported clients are here, but no sync has completed yet, so money numbers aren't live.",
+    };
+
+    private string _nextStep => _isEmpty
+        ? "The first move: load the client roster — mappings, billing, and enforcement all hang off it."
+        : "The best first move: fix identity mappings — billing can only protect clients whose Stripe subscription is linked.";
 
     private double _percent => Snapshot.TotalClients == 0
         ? 0
