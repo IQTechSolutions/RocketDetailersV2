@@ -28,19 +28,9 @@
             <InputText id="password" type="password" @bind-Value="Input.Password" class="rd-auth-field" autocomplete="current-password" />
             <button type="submit" class="rd-auth-btn">Sign in</button>
         </EditForm>
+        <a href="/Account/ForgotPassword" class="rd-auth-cancel">Forgot your password?</a>
     </div>
 </div>
-
-<style>
-    .rd-auth-shell { display:flex; align-items:center; justify-content:center; min-height:100vh; background:#0b1220; }
-    .rd-auth-card { width:340px; padding:32px; border-radius:12px; background:#141d2e; color:#e6ebf5; box-shadow:0 12px 40px rgba(0,0,0,.4); font-family:-apple-system,"Segoe UI",sans-serif; }
-    .rd-auth-brand { font-size:22px; font-weight:700; }
-    .rd-auth-sub { color:#8aa0c6; margin-bottom:20px; }
-    .rd-auth-label { display:block; font-size:12px; color:#8aa0c6; margin:12px 0 4px; }
-    .rd-auth-field { width:100%; padding:10px 12px; border-radius:8px; border:1px solid #2a3752; background:#0e1626; color:#e6ebf5; box-sizing:border-box; }
-    .rd-auth-btn { width:100%; margin-top:20px; padding:11px; border:0; border-radius:8px; background:#3b6fe0; color:#fff; font-weight:600; cursor:pointer; }
-    .rd-auth-error { background:#3a1622; border:1px solid #7a2740; color:#ffb4c4; padding:8px 10px; border-radius:8px; font-size:13px; margin-bottom:8px; }
-</style>
 
 @code {
     [CascadingParameter] private HttpContext HttpContext { get; set; } = default!;

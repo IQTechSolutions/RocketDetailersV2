@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using MudBlazor.Services;
 using RD.Domain;
 using RD.Infrastructure;
+using RD.Infrastructure.Email;
 using RD.Infrastructure.Enforcement;
 using RD.Infrastructure.Reconciliation;
 using RD.Infrastructure.Slack;
@@ -67,6 +68,10 @@ builder.Services.ConfigureApplicationCookie(o =>
     o.LoginPath = "/Account/Login";
     o.AccessDeniedPath = "/Account/Login";
 });
+// Password-reset links are emailed credentials; the default one-day window is
+// far longer than anyone needs to read their inbox. Two hours is the only
+// consumer of this lifespan today (password reset is the sole default-provider token in use).
+builder.Services.Configure<DataProtectionTokenProviderOptions>(o => o.TokenLifespan = TimeSpan.FromHours(2));
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy(Roles.OperatorPolicy, p => p.RequireRole(Roles.OperatorRoles));
 
@@ -85,7 +90,13 @@ builder.Services.AddScoped<OpsService>();
 builder.Services.AddScoped<GhlContactAdminService>();
 builder.Services.AddScoped<ClientMergeService>();
 builder.Services.AddScoped<IdentityAdminService>();
+builder.Services.AddScoped<PasswordResetService>();
 builder.Services.AddSingleton<VendorLinks>();
+
+// Transactional email (password-reset links) + the in-memory resend throttle
+// that keeps the anonymous forgot-password endpoint from becoming a mail bomb.
+builder.Services.AddRdEmail(builder.Configuration);
+builder.Services.AddMemoryCache();
 
 // Lane A gateways + sync jobs + the policy heartbeat + M2 enforcement services
 // (dispatcher, approval CAS, kill switch, state builder, stager).

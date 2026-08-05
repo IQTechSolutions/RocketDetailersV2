@@ -31,6 +31,24 @@ dotnet test RocketDetailers.slnx
 
 Configuration (connection strings, provider API keys) is supplied via user secrets or environment variables — never committed to the repo.
 
+### Email (password resets)
+
+Self-service password reset needs an SMTP relay. Without one the app runs fine — the forgot-password page tells users to ask an Admin instead of promising mail it can't send.
+
+```bash
+dotnet user-secrets set "Email:Host" "smtp.example.com" --project src/RD.Web
+```
+
+| Key | Notes |
+| --- | --- |
+| `Email:Host` | Relay host. Empty ⇒ email disabled |
+| `Email:Port` | Default `587` |
+| `Email:UseStartTls` | Default `true`; turn off only for a local mail catcher |
+| `Email:UserName` / `Email:Password` | Secrets. Empty user ⇒ anonymous relay |
+| `Email:FromAddress` / `Email:FromName` | Required once `Host` is set |
+
+Submission is STARTTLS on 587 (implicit TLS on 465 and XOAUTH2 are not supported — swap `SmtpEmailSender` for MailKit if a relay ever requires them). Reset links are credentials and are never written to logs, so point a local catcher such as smtp4dev at `Email:Host` to see them in development.
+
 ### Versioning
 
 The repo-root `VERSION` file (`MAJOR.MINOR.PATCH.MICRO`) is the single source of truth for assembly versions. `Directory.Build.props` reads it into every project's `VersionPrefix`, `AssemblyVersion`, and `FileVersion`; `Directory.Build.targets` fails the build if the file is missing or malformed. Bump it via the ship workflow rather than editing project files.
