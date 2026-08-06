@@ -30,6 +30,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Deployment configuration contract
+        shell: powershell
+        run: |
+          .\ops\Test-Write-RocketDetailerEnvironment.ps1
+          .\ops\Test-Protect-RocketDetailerSecretStore.ps1
+          .\ops\Test-RocketDetailerDeploymentTransaction.ps1
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
         with:
@@ -68,6 +75,8 @@ jobs:
             --output publish
           New-Item -ItemType Directory -Path publish\_deploy -Force | Out-Null
           Copy-Item ops\Start-RocketDetailer.ps1 publish\_deploy\Start-RocketDetailer.ps1
+          Copy-Item ops\Protect-RocketDetailerSecretStore.ps1 publish\_deploy\Protect-RocketDetailerSecretStore.ps1
+          Copy-Item ops\Write-RocketDetailerEnvironment.ps1 publish\_deploy\Write-RocketDetailerEnvironment.ps1
 
       - name: Upload artifact
         if: github.event_name != 'pull_request'
@@ -93,12 +102,14 @@ jobs:
         shell: powershell
         env:
           LIVE_CONNECTION_STRING: ${{ secrets.LIVE_CONNECTION_STRING }}
+          LIVE_APPLICATION_ENVIRONMENT_JSON: ${{ secrets.LIVE_APPLICATION_ENVIRONMENT_JSON }}
         run: |
           $missing = @()
           if (-not '${{ vars.APP_ROOT }}')        { $missing += 'APP_ROOT variable' }
           if (-not '${{ vars.WINDOWS_SERVICE }}') { $missing += 'WINDOWS_SERVICE variable' }
           if (-not '${{ vars.LIVE_URL }}')         { $missing += 'LIVE_URL variable' }
           if (-not $env:LIVE_CONNECTION_STRING)    { $missing += 'LIVE_CONNECTION_STRING environment secret' }
+          if (-not $env:LIVE_APPLICATION_ENVIRONMENT_JSON) { $missing += 'LIVE_APPLICATION_ENVIRONMENT_JSON environment secret' }
           if ($missing.Count) {
             throw "Missing live configuration: $($missing -join ', ')"
           }
@@ -150,32 +161,124 @@ jobs:
             Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "Staged release $releaseId."
 
+      - name: Protect live secret store
+        shell: powershell
+        run: |
+          $serviceName = '${{ vars.WINDOWS_SERVICE }}'
+          $service = Get-CimInstance -ClassName Win32_Service |
+            Where-Object Name -EQ $serviceName |
+            Select-Object -First 1
+          if ($null -eq $service -or -not $service.StartName) {
+            throw "Cannot resolve the Windows service identity for $serviceName."
+          }
+
+          $protector = Join-Path $PWD 'publish\_deploy\Protect-RocketDetailerSecretStore.ps1'
+          $secretDirectory = Join-Path $env:ProgramData 'RocketDetailer\secrets'
+          & $protector `
+            -DirectoryPath $secretDirectory `
+            -ServiceIdentity ([string] $service.StartName)
+
+      - name: Prepare release transaction
+        shell: powershell
+        run: |
+          $root = '${{ vars.APP_ROOT }}'
+          $current = Join-Path $root 'current'
+          $journalDirectory = Join-Path $root 'shared\service'
+          $journalPath = Join-Path $journalDirectory 'deploy-transaction.json'
+          if (-not (Test-Path -LiteralPath $journalDirectory -PathType Container)) {
+            throw "Release journal directory is missing: $journalDirectory"
+          }
+          if (Test-Path -LiteralPath $journalPath) {
+            throw "A pending release journal requires manual recovery: $journalPath"
+          }
+
+          $currentExisted = Test-Path -LiteralPath $current -PathType Container
+          $previous = ''
+          if ($currentExisted) {
+            $currentItem = Get-Item -LiteralPath $current -Force
+            if ($currentItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+              if ($currentItem.LinkType -notin @('Junction', 'SymbolicLink')) {
+                throw "Unsupported current release link type: $($currentItem.LinkType)"
+              }
+              $previous = [string] $currentItem.Target
+              if (-not $previous -or -not (Test-Path -LiteralPath $previous -PathType Container)) {
+                throw "Current release target is unavailable: $previous"
+              }
+            } else {
+              $previous = Join-Path $root 'current.rollback.${{ github.run_id }}-${{ github.run_attempt }}'
+              if (Test-Path -LiteralPath $previous) {
+                throw "Prepared rollback path already exists: $previous"
+              }
+            }
+          }
+
+          $journalTemp = "$journalPath.new"
+          $journal = [ordered]@{
+            RunId = '${{ github.run_id }}'
+            RunAttempt = '${{ github.run_attempt }}'
+            ReleasePath = $env:RELEASE_PATH
+            PreviousRelease = $previous
+            CurrentExisted = $currentExisted
+            CreatedUtc = [DateTime]::UtcNow.ToString('o')
+          } | ConvertTo-Json
+          try {
+            [IO.File]::WriteAllText(
+              $journalTemp,
+              $journal,
+              [Text.UTF8Encoding]::new($false))
+            [IO.File]::Move($journalTemp, $journalPath)
+          } finally {
+            if (Test-Path -LiteralPath $journalTemp) {
+              Remove-Item -LiteralPath $journalTemp -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+          @(
+            'RD_RELEASE_TXN_ARMED=true'
+            "RD_RELEASE_JOURNAL_PATH=$journalPath"
+            "RD_CURRENT_EXISTED=$($currentExisted.ToString().ToLowerInvariant())"
+            "PREVIOUS_RELEASE=$previous"
+          ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prepare configuration transaction
+        shell: powershell
+        run: |
+          $secrets = Join-Path $env:ProgramData 'RocketDetailer\secrets'
+          if (-not (Test-Path -LiteralPath $secrets -PathType Container)) {
+            throw 'The restricted Rocket Detailer secret directory has not been provisioned.'
+          }
+
+          $configPath = Join-Path $secrets 'dotnet.application.environment.json'
+          $configBackup = "$configPath.previous"
+          if (Test-Path -LiteralPath $configBackup) {
+            throw "A pending configuration backup requires manual recovery: $configBackup"
+          }
+
+          $hadPreviousConfig = Test-Path -LiteralPath $configPath -PathType Leaf
+          @(
+            'RD_CONFIG_TXN_ARMED=true'
+            "RD_CONFIG_PATH=$configPath"
+            "RD_CONFIG_BACKUP_PATH=$configBackup"
+            "RD_CONFIG_HAD_PREVIOUS=$($hadPreviousConfig.ToString().ToLowerInvariant())"
+          ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Configure live service
         shell: powershell
         env:
           LIVE_CONNECTION_STRING: ${{ secrets.LIVE_CONNECTION_STRING }}
+          LIVE_APPLICATION_ENVIRONMENT_JSON: ${{ secrets.LIVE_APPLICATION_ENVIRONMENT_JSON }}
         run: |
           $root = '${{ vars.APP_ROOT }}'
-          $secrets = Join-Path $env:ProgramData 'RocketDetailer\secrets'
-          $configPath = Join-Path $secrets 'dotnet.application.environment.json'
-          $configTemp = "$configPath.new"
           $launcherSource = Join-Path $PWD 'publish\_deploy\Start-RocketDetailer.ps1'
+          $configWriter = Join-Path $PWD 'publish\_deploy\Write-RocketDetailerEnvironment.ps1'
           $launcherTarget = Join-Path $root 'shared\service\Start-RocketDetailer.ps1'
-          $connectionString = ([string] $env:LIVE_CONNECTION_STRING).TrimStart([char] 0xFEFF)
 
-          if ($connectionString -notmatch '^(Data Source|Server)\s*=') {
-            throw 'LIVE_CONNECTION_STRING does not begin with a supported SQL Server key.'
-          }
-
-          New-Item -ItemType Directory -Path $secrets -Force | Out-Null
-          $configJson = @{
-            ConnectionStrings__RocketDetailers = $connectionString
-          } | ConvertTo-Json
-          [IO.File]::WriteAllText(
-            $configTemp,
-            $configJson,
-            [Text.UTF8Encoding]::new($false))
-          Move-Item -LiteralPath $configTemp -Destination $configPath -Force
+          & $configWriter `
+            -ConfigPath $env:RD_CONFIG_PATH `
+            -ConnectionString $env:LIVE_CONNECTION_STRING `
+            -ApplicationEnvironmentJson $env:LIVE_APPLICATION_ENVIRONMENT_JSON
+          'RD_CONFIG_UPDATED=true' |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
           $launcherBackup = "$launcherTarget.pre-dotnet"
           if (-not (Test-Path -LiteralPath $launcherBackup) -and
@@ -201,7 +304,8 @@ jobs:
           $root = '${{ vars.APP_ROOT }}'
           $current = Join-Path $root 'current'
           $service = '${{ vars.WINDOWS_SERVICE }}'
-          $previous = $null
+          $previous = $env:PREVIOUS_RELEASE
+          $currentExisted = $env:RD_CURRENT_EXISTED -eq 'true'
           $currentDetached = $false
           $newLinkCreated = $false
 
@@ -211,25 +315,29 @@ jobs:
             if (Test-Path -LiteralPath $current) {
               $currentItem = Get-Item -LiteralPath $current -Force
               if ($currentItem.LinkType -in @('Junction', 'SymbolicLink')) {
-                $previous = [string]$currentItem.Target
+                $actualTarget = [string] $currentItem.Target
+                if (-not $currentExisted -or $actualTarget -ne $previous) {
+                  throw 'The current release changed after the transaction journal was prepared.'
+                }
                 Remove-DirectoryLink -Path $current
                 $currentDetached = $true
               } else {
-                $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-                $previous = Join-Path $root "current.rollback.$stamp"
+                if (-not $currentExisted -or -not $previous) {
+                  throw 'The current release no longer matches the prepared transaction.'
+                }
                 Move-Item -LiteralPath $current -Destination $previous
                 $currentDetached = $true
               }
+            } elseif ($currentExisted) {
+              throw 'The current release disappeared after the transaction journal was prepared.'
             }
 
             New-Item -ItemType Junction -Path $current -Target $env:RELEASE_PATH | Out-Null
             $newLinkCreated = $true
+            'SWITCHED=true' |
+              Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
             Start-Service -Name $service -ErrorAction Stop
-            "PREVIOUS_RELEASE=$previous" |
-              Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-            "SWITCHED=true" |
-              Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
             Write-Host "Service started from $env:RELEASE_PATH."
           } catch {
             Write-Warning "Release switch failed: $_"
@@ -247,6 +355,7 @@ jobs:
 
       - name: Verify live health
         shell: powershell
+        timeout-minutes: 8
         run: |
           $urls = @(
             'http://127.0.0.1:3000/health',
@@ -255,9 +364,9 @@ jobs:
 
           foreach ($url in $urls) {
             $healthy = $false
-            foreach ($attempt in 1..18) {
+            foreach ($attempt in 1..8) {
               try {
-                $response = Invoke-WebRequest -Uri $url -TimeoutSec 20 -UseBasicParsing
+                $response = Invoke-WebRequest -Uri $url -TimeoutSec 15 -UseBasicParsing
                 if ($response.StatusCode -eq 200) {
                   Write-Host "Healthy: $url (attempt $attempt)"
                   $healthy = $true
@@ -266,15 +375,34 @@ jobs:
               } catch {
                 Write-Host "Attempt ${attempt} for ${url}: $($_.Exception.Message)"
               }
-              Start-Sleep -Seconds 10
+              Start-Sleep -Seconds 5
             }
             if (-not $healthy) {
               throw "Health check failed: $url"
             }
           }
 
-      - name: Roll back failed release
-        if: failure() && env.SWITCHED == 'true'
+      - name: Mark deployment transaction verified
+        if: success()
+        shell: powershell
+        run: |
+          'RD_DEPLOY_VERIFIED=true' |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Finalize deployment transaction
+        if: success() && env.RD_DEPLOY_VERIFIED == 'true'
+        shell: powershell
+        run: |
+          if (Test-Path -LiteralPath $env:RD_CONFIG_BACKUP_PATH -PathType Leaf) {
+            Remove-Item -LiteralPath $env:RD_CONFIG_BACKUP_PATH -Force
+          }
+          if (Test-Path -LiteralPath $env:RD_RELEASE_JOURNAL_PATH -PathType Leaf) {
+            Remove-Item -LiteralPath $env:RD_RELEASE_JOURNAL_PATH -Force
+          }
+          Write-Host 'Live release and configuration transaction committed.'
+
+      - name: Roll back failed release and configuration
+        if: (failure() || cancelled()) && env.RD_DEPLOY_VERIFIED != 'true' && (env.RD_CONFIG_TXN_ARMED == 'true' || env.RD_RELEASE_TXN_ARMED == 'true')
         shell: powershell
         run: |
           function Remove-DirectoryLink {
@@ -290,24 +418,158 @@ jobs:
           $root = '${{ vars.APP_ROOT }}'
           $current = Join-Path $root 'current'
           $service = '${{ vars.WINDOWS_SERVICE }}'
-
-          Write-Warning "Deployment failed; restoring $env:PREVIOUS_RELEASE"
-          Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
-          if (Test-Path -LiteralPath $current) {
-            $currentItem = Get-Item -LiteralPath $current -Force
-            if ($currentItem.LinkType -notin @('Junction', 'SymbolicLink')) {
-              throw "Refusing rollback because $current is not a link."
+          $hadPreviousConfig = $env:RD_CONFIG_HAD_PREVIOUS -eq 'true'
+          $currentExisted = $env:RD_CURRENT_EXISTED -eq 'true'
+          $configChanged = $false
+          if ($env:RD_CONFIG_TXN_ARMED -eq 'true') {
+            $configChanged =
+              ($hadPreviousConfig -and
+                (Test-Path -LiteralPath $env:RD_CONFIG_BACKUP_PATH -PathType Leaf)) -or
+              (-not $hadPreviousConfig -and
+                (Test-Path -LiteralPath $env:RD_CONFIG_PATH -PathType Leaf))
+          }
+          $releaseChanged = $false
+          $releaseStateUnknown = $false
+          if ($env:RD_RELEASE_TXN_ARMED -eq 'true') {
+            if (Test-Path -LiteralPath $current -PathType Container) {
+              $currentItem = Get-Item -LiteralPath $current -Force
+              if ($currentItem.LinkType -in @('Junction', 'SymbolicLink')) {
+                $currentTarget = [string] $currentItem.Target
+                if ($currentTarget -eq $env:RELEASE_PATH) {
+                  $releaseChanged = $true
+                } elseif ($currentExisted -and $currentTarget -eq $env:PREVIOUS_RELEASE) {
+                  $releaseChanged = $false
+                } else {
+                  $releaseChanged = $true
+                  $releaseStateUnknown = $true
+                }
+              } elseif ($currentExisted -and
+                  -not (Test-Path -LiteralPath $env:PREVIOUS_RELEASE)) {
+                $releaseChanged = $false
+              } else {
+                $releaseChanged = $true
+                $releaseStateUnknown = $true
+              }
+            } elseif ($currentExisted) {
+              $releaseChanged = $true
             }
-            Remove-DirectoryLink -Path $current
           }
-          if (-not $env:PREVIOUS_RELEASE -or
-              -not (Test-Path -LiteralPath $env:PREVIOUS_RELEASE)) {
-            throw 'The previous release path is unavailable; manual recovery is required.'
+          $rollbackErrors = @()
+
+          if (-not $configChanged -and -not $releaseChanged) {
+            if (Test-Path -LiteralPath $env:RD_RELEASE_JOURNAL_PATH -PathType Leaf) {
+              Remove-Item -LiteralPath $env:RD_RELEASE_JOURNAL_PATH -Force
+            }
+            Write-Host 'No live configuration or release switch was committed; rollback is not required.'
+            return
           }
 
-          New-Item -ItemType Junction -Path $current -Target $env:PREVIOUS_RELEASE | Out-Null
-          Start-Service -Name $service -ErrorAction Stop
-          Write-Warning 'File rollback completed. Database migrations are not rolled back.'
+          Write-Warning 'Deployment failed; restoring the previous release transaction.'
+          Stop-Service -Name $service -Force -ErrorAction Stop
+
+          if ($configChanged) {
+            try {
+              if ($hadPreviousConfig) {
+                if (-not (Test-Path -LiteralPath $env:RD_CONFIG_BACKUP_PATH -PathType Leaf)) {
+                  throw "Configuration backup is missing: $env:RD_CONFIG_BACKUP_PATH"
+                }
+
+                $restoreTemp = "$($env:RD_CONFIG_PATH).restore"
+                if (Test-Path -LiteralPath $restoreTemp) {
+                  throw "A pending restore file requires manual recovery: $restoreTemp"
+                }
+                $expectedHash = (Get-FileHash `
+                  -LiteralPath $env:RD_CONFIG_BACKUP_PATH `
+                  -Algorithm SHA256).Hash
+                [IO.File]::Copy($env:RD_CONFIG_BACKUP_PATH, $restoreTemp, $false)
+                $discardBackup = $null
+                try {
+                  if (Test-Path -LiteralPath $env:RD_CONFIG_PATH -PathType Leaf) {
+                    $discardBackup = "$($env:RD_CONFIG_PATH).failed"
+                    if (Test-Path -LiteralPath $discardBackup) {
+                      throw "A pending failed-config backup requires manual recovery: $discardBackup"
+                    }
+                    [IO.File]::Replace(
+                      $restoreTemp,
+                      $env:RD_CONFIG_PATH,
+                      $discardBackup,
+                      $true)
+                  } else {
+                    [IO.File]::Move($restoreTemp, $env:RD_CONFIG_PATH)
+                  }
+                } finally {
+                  if (Test-Path -LiteralPath $restoreTemp) {
+                    Remove-Item -LiteralPath $restoreTemp -Force -ErrorAction SilentlyContinue
+                  }
+                }
+
+                $restoredHash = (Get-FileHash `
+                  -LiteralPath $env:RD_CONFIG_PATH `
+                  -Algorithm SHA256).Hash
+                if ($restoredHash -ne $expectedHash) {
+                  throw 'Restored application configuration failed hash verification.'
+                }
+                if ($discardBackup -and (Test-Path -LiteralPath $discardBackup -PathType Leaf)) {
+                  Remove-Item -LiteralPath $discardBackup -Force
+                }
+                Remove-Item -LiteralPath $env:RD_CONFIG_BACKUP_PATH -Force
+              } elseif (Test-Path -LiteralPath $env:RD_CONFIG_PATH -PathType Leaf) {
+                Remove-Item -LiteralPath $env:RD_CONFIG_PATH -Force
+              }
+              Write-Warning 'Application environment rollback completed.'
+            } catch {
+              $rollbackErrors += "Configuration rollback failed: $($_.Exception.Message)"
+            }
+          }
+
+          if ($releaseChanged) {
+            try {
+              if ($releaseStateUnknown) {
+                throw 'The current release is not the journaled old or new target; refusing to mutate it.'
+              }
+
+              if ($currentExisted) {
+                if (-not $env:PREVIOUS_RELEASE -or
+                    -not (Test-Path -LiteralPath $env:PREVIOUS_RELEASE -PathType Container)) {
+                  throw 'The previous release path is unavailable; the current link was not changed.'
+                }
+
+                if (Test-Path -LiteralPath $current -PathType Container) {
+                  $currentItem = Get-Item -LiteralPath $current -Force
+                  if ($currentItem.LinkType -notin @('Junction', 'SymbolicLink') -or
+                      [string] $currentItem.Target -ne $env:RELEASE_PATH) {
+                    throw 'The active release is not the failed journaled target; refusing to remove it.'
+                  }
+                  Remove-DirectoryLink -Path $current
+                }
+                New-Item -ItemType Junction -Path $current -Target $env:PREVIOUS_RELEASE | Out-Null
+              } elseif (Test-Path -LiteralPath $current -PathType Container) {
+                $currentItem = Get-Item -LiteralPath $current -Force
+                if ($currentItem.LinkType -notin @('Junction', 'SymbolicLink') -or
+                    [string] $currentItem.Target -ne $env:RELEASE_PATH) {
+                  throw 'The first release target is unexpected; refusing to remove it.'
+                }
+                Remove-DirectoryLink -Path $current
+              }
+              Write-Warning 'File rollback completed. Database migrations are not rolled back.'
+            } catch {
+              $rollbackErrors += "Release rollback failed: $($_.Exception.Message)"
+            }
+          }
+
+          if ($rollbackErrors.Count) {
+            throw ($rollbackErrors -join ' ')
+          }
+
+          if ($currentExisted) {
+            Start-Service -Name $service -ErrorAction Stop
+          } else {
+            Write-Warning 'No previous release existed; the service remains stopped.'
+          }
+          if (Test-Path -LiteralPath $env:RD_RELEASE_JOURNAL_PATH -PathType Leaf) {
+            Remove-Item -LiteralPath $env:RD_RELEASE_JOURNAL_PATH -Force
+          }
+          Write-Warning 'Release transaction rollback completed.'
 
       - name: Deployment summary
         if: always()
