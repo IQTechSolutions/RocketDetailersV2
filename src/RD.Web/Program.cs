@@ -149,7 +149,8 @@ app.UseAntiforgery();
 
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
-    .AddInteractiveServerRenderMode();
+    .AddInteractiveServerRenderMode(options =>
+        options.DisableWebSocketCompression = true);
 
 // Reaching this endpoint proves startup, database migrations, Hangfire, and
 // identity seeding all completed. CI polls it after switching the live release.
