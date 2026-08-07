@@ -42,6 +42,22 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Validate deployment scripts
+        shell: powershell
+        run: |
+          $scripts = @(
+            'ops\Start-RocketDetailer.ps1',
+            'ops\Test-RocketDetailerBlazorTransport.ps1'
+          )
+          foreach ($script in $scripts) {
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Join-Path $PWD $script), [ref]$null, [ref]$parseErrors)
+            if ($parseErrors.Count) {
+              throw "$script is invalid: $($parseErrors -join '; ')"
+            }
+          }
+
       - name: Restore
         run: dotnet restore
 
@@ -77,6 +93,8 @@ jobs:
           Copy-Item ops\Start-RocketDetailer.ps1 publish\_deploy\Start-RocketDetailer.ps1
           Copy-Item ops\Protect-RocketDetailerSecretStore.ps1 publish\_deploy\Protect-RocketDetailerSecretStore.ps1
           Copy-Item ops\Write-RocketDetailerEnvironment.ps1 publish\_deploy\Write-RocketDetailerEnvironment.ps1
+          Copy-Item ops\Test-RocketDetailerBlazorTransport.ps1 `
+            publish\_deploy\Test-RocketDetailerBlazorTransport.ps1
 
       - name: Upload artifact
         if: github.event_name != 'pull_request'
@@ -381,6 +399,12 @@ jobs:
               throw "Health check failed: $url"
             }
           }
+
+      - name: Verify public Blazor WebSocket transport
+        shell: powershell
+        run: |
+          & (Join-Path $PWD 'publish\_deploy\Test-RocketDetailerBlazorTransport.ps1') `
+            -BaseUri ([uri]'${{ vars.LIVE_URL }}')
 
       - name: Mark deployment transaction verified
         if: success()
