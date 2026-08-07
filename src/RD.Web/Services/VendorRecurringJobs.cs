@@ -25,10 +25,11 @@ public static class VendorRecurringJobs
 
         if (!string.IsNullOrWhiteSpace(configuration["Meta:AccessToken"])
             && !string.IsNullOrWhiteSpace(configuration["Meta:AdAccountId"]))
+            // The policy and cockpit freshness gates expire Meta data after 30 minutes.
             recurring.AddOrUpdate<MetaSyncJob>(
                 "meta-sync",
                 job => job.RunAsync(CancellationToken.None),
-                "0 * * * *");
+                "*/15 * * * *");
         else
             recurring.RemoveIfExists("meta-sync");
 
