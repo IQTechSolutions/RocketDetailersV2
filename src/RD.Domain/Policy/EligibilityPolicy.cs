@@ -36,6 +36,8 @@ namespace RD.Domain.Policy;
 public static class EligibilityPolicy
 {
     public const string Version = "1.0.0";
+    public const string ExternallyPausedPaymentReason =
+        "Client is paid up but a campaign was paused outside the app — never auto-resume someone else's pause.";
 
     public static readonly TimeSpan StalenessBound = TimeSpan.FromMinutes(30);
     public static readonly TimeSpan UnverifiedSendEscalationAfter = TimeSpan.FromHours(6);
@@ -156,7 +158,7 @@ public static class EligibilityPolicy
         var externallyPaused = s.Campaigns.Any(c => c.IsPaused && !c.PausedByApp);
         if (externallyPaused)
             return new(ProposedActionType.Investigate,
-                "Client is paid up but a campaign was paused outside the app — never auto-resume someone else's pause.",
+                ExternallyPausedPaymentReason,
                 InvestigationKind.ExternallyPausedPayment);
 
         return new(ProposedActionType.None, "Paid up, ads running — nothing to do.");

@@ -25,6 +25,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\RD.Domain\RD.Domain.csproj" />
     <ProjectReference Include="..\..\src\RD.Infrastructure\RD.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\RD.Tools.Import\RD.Tools.Import.csproj" />
     <ProjectReference Include="..\..\src\RD.Web\RD.Web.csproj" />
   </ItemGroup>
 

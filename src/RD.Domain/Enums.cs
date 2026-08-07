@@ -61,7 +61,8 @@ public enum InvestigationKind
     UnmappedIdentity = 0, DuplicateStripeCustomer = 1, ExternallyPausedPayment = 2,
     CanceledSubPayment = 3, NonUsdCurrency = 4, MissingTrialExpiry = 5,
     StaleSync = 6, DeliveryUnverified = 7, ExposureCapExceeded = 8,
-    SpendAnomaly = 9, ImportConflict = 10, PaymentArrangementUnclear = 11, Other = 99
+    SpendAnomaly = 9, ImportConflict = 10, PaymentArrangementUnclear = 11,
+    StripeCustomerDelinquent = 12, Other = 99
 }
 
 /// <summary>

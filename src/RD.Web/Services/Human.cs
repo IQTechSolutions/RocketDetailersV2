@@ -15,7 +15,7 @@ public static class Human
     {
         InvestigationKind.UnmappedIdentity => "no Stripe subscription linked",
         InvestigationKind.DuplicateStripeCustomer => "duplicate Stripe customers",
-        InvestigationKind.ExternallyPausedPayment => "payment arrived for externally-paused ads",
+        InvestigationKind.ExternallyPausedPayment => "recorded external campaign pause for a paid-up client",
         InvestigationKind.CanceledSubPayment => "payment received on a canceled subscription",
         InvestigationKind.NonUsdCurrency => "billed in a non-USD currency",
         InvestigationKind.MissingTrialExpiry => "trial has no expiry date",
@@ -24,6 +24,7 @@ public static class Human
         InvestigationKind.ExposureCapExceeded => "exposure cap exceeded",
         InvestigationKind.SpendAnomaly => "ad spend looks wrong",
         InvestigationKind.ImportConflict => "import conflict",
+        InvestigationKind.StripeCustomerDelinquent => "Stripe customer is delinquent",
         _ => "other — read the detail",
     };
 
@@ -31,7 +32,7 @@ public static class Human
     {
         InvestigationKind.UnmappedIdentity => "Enforcement impossible — billing can't drive ads until the subscription is linked.",
         InvestigationKind.DuplicateStripeCustomer => "Risk of double billing the same business.",
-        InvestigationKind.ExternallyPausedPayment => "A human paused these ads; the app never auto-resumes what it didn't pause.",
+        InvestigationKind.ExternallyPausedPayment => "Opened when a linked campaign was reported paused outside the app. Review current evidence; the app never auto-resumes a pause it didn't create.",
         InvestigationKind.CanceledSubPayment => "A payment can't reactivate a canceled subscription — needs a re-subscribe.",
         InvestigationKind.NonUsdCurrency => "v1 is USD-only; these clients are excluded from the company exposure number.",
         InvestigationKind.MissingTrialExpiry => "A trial without an end date is a gap, not a free pass — backfill the real date.",
@@ -40,15 +41,8 @@ public static class Human
         InvestigationKind.ExposureCapExceeded => "This client's unbilled ad spend passed the max-loss cap — human decision required.",
         InvestigationKind.SpendAnomaly => "Spend far off the package budget, or zero spend while live.",
         InvestigationKind.ImportConflict => "Two clients claimed the same external identity during the spreadsheet import.",
+        InvestigationKind.StripeCustomerDelinquent => "Stripe reports an unpaid balance; verify billing before promoting this client.",
         _ => "Doesn't fit the other buckets — read the item detail.",
-    };
-
-    /// <summary>The counting noun for a gap group ("45 clients — …" vs "19 conflicts — …").</summary>
-    public static string UnitNoun(this InvestigationKind kind, int count) => kind switch
-    {
-        InvestigationKind.ImportConflict => count == 1 ? "conflict" : "conflicts",
-        InvestigationKind.StaleSync or InvestigationKind.Other => count == 1 ? "item" : "items",
-        _ => count == 1 ? "client" : "clients",
     };
 
     // ---------------- Enforcement ladder ----------------

@@ -1,15 +1,15 @@
 @* Right rail, always visible: open investigation items grouped by kind, in plain English, each linking into the work queue. *@
 <MudPaper Elevation="1" Class="pa-4" Style="height:100%;">
     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
-        <MudText Typo="Typo.h6">Mapping gaps</MudText>
-        <HelpHint Text="Broken or missing links between your systems (Stripe, Meta, GHL). Every gap blocks enforcement for someone — fix these to climb toward Assist and Auto mode." />
+        <MudText Typo="Typo.h6">Open investigations</MudText>
+        <HelpHint Text="Safety, billing, sync, and identity work awaiting review. Counts are open work items, not live vendor totals — open an item and verify its current evidence before resolving it." />
     </MudStack>
 
     @if (Gaps.Count == 0)
     {
         <EmptyState Icon="@Icons.Material.Filled.Celebration"
-                    Title="0 gaps — Auto mode unlocked 🎉"
-                    Hint="Every client's identities are linked and verified. The ladder is open." />
+                    Title="No open investigations"
+                    Hint="Nothing currently needs operator review in this queue." />
     }
     else
     {
@@ -17,11 +17,11 @@
         {
             <MudPaper Outlined="true" Class="pa-3 mb-2">
                 <MudText Typo="Typo.subtitle2">
-                    @gap.Count @gap.Kind.UnitNoun(gap.Count) — @gap.Kind.Title()
+                    @gap.Count open @(gap.Count == 1 ? "item" : "items") — @gap.Kind.Title()
                 </MudText>
                 <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">@gap.Kind.WhyItMatters()</MudText>
                 <MudLink Href="@($"/reconciliation?kind={gap.Kind}")" Typo="Typo.caption" Class="mt-1 d-inline-block">
-                    → Fix these
+                    → Review items
                 </MudLink>
             </MudPaper>
         }
