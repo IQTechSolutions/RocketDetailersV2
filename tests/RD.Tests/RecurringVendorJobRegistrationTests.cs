@@ -75,6 +75,24 @@ public sealed class RecurringVendorJobRegistrationTests
     }
 
     [Fact]
+    public void Reconcile_SchedulesMetaOftenEnough_ToStayInsideFreshnessGate()
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["Meta:AccessToken"] = "meta_test_dummy",
+            ["Meta:AdAccountId"] = "act_1234"
+        };
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(settings)
+            .Build();
+        var recurring = new RecordingRecurringJobManager();
+
+        VendorRecurringJobs.Reconcile(recurring, configuration);
+
+        recurring.CronByJobId["meta-sync"].Should().Be("*/15 * * * *");
+    }
+
+    [Fact]
     public void Reconcile_RemovesMetaJob_WhenAdAccountIdIsMissing()
     {
         var settings = new Dictionary<string, string?>
@@ -96,12 +114,17 @@ public sealed class RecurringVendorJobRegistrationTests
     {
         public HashSet<string> Added { get; } = [];
         public HashSet<string> Removed { get; } = [];
+        public Dictionary<string, string> CronByJobId { get; } = [];
 
         public void AddOrUpdate(
             string recurringJobId,
             Job job,
             string cronExpression,
-            RecurringJobOptions options) => Added.Add(recurringJobId);
+            RecurringJobOptions options)
+        {
+            Added.Add(recurringJobId);
+            CronByJobId[recurringJobId] = cronExpression;
+        }
 
         public void Trigger(string recurringJobId) =>
             throw new NotSupportedException("Trigger is not used by registration reconciliation.");
