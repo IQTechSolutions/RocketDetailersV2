@@ -2,6 +2,7 @@ using Bunit;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MudBlazor.Services;
+using RD.Domain;
 using RD.Web.Components.Cockpit;
 using RD.Web.Services;
 
@@ -126,5 +127,24 @@ public class CockpitRenderTests : BunitContext, IAsyncLifetime
 
         cut.Markup.Should().Contain("All quiet — every client paid ✓");
         cut.Markup.Should().Contain("Clean streak");
+    }
+
+    [Fact]
+    public void Investigation_panel_uses_queue_language_and_counts_open_items()
+    {
+        var cut = Render<MappingGapsPanel>(parameters => parameters.Add(
+            component => component.Gaps,
+            [new MappingGap(InvestigationKind.ExternallyPausedPayment, 3)]));
+
+        cut.Markup.Should().Contain("Open investigations");
+        cut.Markup.Should().NotContain("Mapping gaps");
+        cut.Markup.Should().Contain("3 open items");
+        cut.Markup.Should().NotContain("3 clients");
+        cut.Markup.Should().Contain("recorded external campaign pause for a paid-up client");
+        cut.Markup.Should().Contain("Opened when a linked campaign was reported paused outside the app");
+        cut.Markup.Should().Contain("Review items");
+        cut.Markup.Should().NotContain("payment arrived for externally-paused ads");
+        cut.Markup.Should().NotContain("A human paused these ads");
+        cut.Markup.Should().NotContain("Fix these");
     }
 }

@@ -89,6 +89,7 @@ builder.Services.AddScoped<PackageAdminService>();
 builder.Services.AddScoped<OpsService>();
 builder.Services.AddScoped<GhlContactAdminService>();
 builder.Services.AddScoped<ClientMergeService>();
+builder.Services.AddScoped<LegacyInvestigationCleanup>();
 builder.Services.AddScoped<IdentityAdminService>();
 builder.Services.AddScoped<PasswordResetService>();
 builder.Services.AddSingleton<VendorLinks>();
@@ -128,6 +129,12 @@ using (var migrationScope = app.Services.CreateScope())
     var factory = migrationScope.ServiceProvider.GetRequiredService<IDbContextFactory<RdDbContext>>();
     await using var db = await factory.CreateDbContextAsync();
     await db.Database.MigrateAsync();
+
+    var legacyCleanup = migrationScope.ServiceProvider.GetRequiredService<LegacyInvestigationCleanup>();
+    var dismissedCount = await legacyCleanup.RunAsync();
+    app.Logger.LogInformation(
+        "Legacy Stripe investigation cleanup dismissed {AffectedCount} misclassified item(s).",
+        dismissedCount);
 }
 
 // Configure the HTTP request pipeline.

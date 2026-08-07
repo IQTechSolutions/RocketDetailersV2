@@ -31,6 +31,8 @@ public sealed class PolicyEvaluationJob(
     IClock clock,
     ILogger<PolicyEvaluationJob> logger)
 {
+    private const string AutoResolutionActor = "policy-evaluation";
+
     public async Task RunAsync(CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
@@ -57,7 +59,25 @@ public sealed class PolicyEvaluationJob(
                 .ToListAsync(ct))
             .Select(i => (i.ClientId!.Value, i.Kind)).ToHashSet();
 
-        var evaluated = 0; var logged = 0; var investigationsCreated = 0; var staged = 0; var demoted = 0;
+        // InvestigationItem has no durable source/provenance column yet. Limit
+        // automatic lifecycle management to the exact detail emitted by this
+        // policy branch. Filter the detail in memory with ordinal comparison so
+        // SQL Server's case-insensitive collation cannot broaden the fingerprint.
+        var externalPauseCandidates = await db.InvestigationItems.AsNoTracking()
+            .Where(i => i.Status == InvestigationStatus.Open
+                        && i.ClientId != null
+                        && i.Kind == InvestigationKind.ExternallyPausedPayment)
+            .Select(i => new { i.Id, i.ClientId, i.Detail })
+            .ToListAsync(ct);
+        var openPolicyExternalPausesByClient = externalPauseCandidates
+            .Where(i => string.Equals(
+                i.Detail,
+                EligibilityPolicy.ExternallyPausedPaymentReason,
+                StringComparison.Ordinal))
+            .GroupBy(i => i.ClientId!.Value)
+            .ToDictionary(g => g.Key, g => g.Select(i => i.Id).ToArray());
+
+        var evaluated = 0; var logged = 0; var investigationsCreated = 0; var investigationsResolved = 0; var staged = 0; var demoted = 0;
         var demoteIds = new List<Guid>();
 
         foreach (var client in clients)
@@ -67,6 +87,24 @@ public sealed class PolicyEvaluationJob(
             var state = await stateBuilder.BuildAsync(db, client, ctx, ct);
             var verdict = EligibilityPolicy.Evaluate(state);
             evaluated++;
+
+            if (openPolicyExternalPausesByClient.TryGetValue(client.Id, out var externalPauseIds)
+                && await GetExternalPauseResolutionNoteAsync(db, client.Id, state, ct) is { } resolutionNote)
+            {
+                // Compare-and-set: an operator may resolve/dismiss after the IDs
+                // were read. Only untouched Open rows are ours to auto-resolve.
+                investigationsResolved += await db.InvestigationItems
+                    .Where(i => externalPauseIds.Contains(i.Id)
+                                && i.Status == InvestigationStatus.Open
+                                && i.ResolvedAt == null
+                                && i.ResolvedBy == null
+                                && i.ResolutionNote == null)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(i => i.Status, InvestigationStatus.Resolved)
+                        .SetProperty(i => i.ResolvedAt, now)
+                        .SetProperty(i => i.ResolvedBy, AutoResolutionActor)
+                        .SetProperty(i => i.ResolutionNote, resolutionNote), ct);
+            }
 
             var previous = latestByClient.GetValueOrDefault(client.Id);
             var changed = previous is null
@@ -123,8 +161,93 @@ public sealed class PolicyEvaluationJob(
         }
 
         logger.LogInformation(
-            "Policy evaluation: {Evaluated} evaluated, {Logged} decisions, {Investigations} new investigations, {Staged} actions staged, {Demoted} demoted to Shadow.",
-            evaluated, logged, investigationsCreated, staged, demoted);
+            "Policy evaluation: {Evaluated} evaluated, {Logged} decisions, {Investigations} new investigations, {InvestigationsResolved} investigations auto-resolved, {Staged} actions staged, {Demoted} demoted to Shadow.",
+            evaluated, logged, investigationsCreated, investigationsResolved, staged, demoted);
+    }
+
+    /// <summary>
+    /// Returns an audit note only when fresh vendor evidence disproves one of the
+    /// two facts behind ExternallyPausedPayment: (a) a linked campaign is still
+    /// externally paused and (b) the client is still paid up. A different policy
+    /// verdict is not evidence because higher-priority rules can mask (a).
+    /// </summary>
+    private static async Task<string?> GetExternalPauseResolutionNoteAsync(
+        RdDbContext db,
+        Guid clientId,
+        ClientState state,
+        CancellationToken ct)
+    {
+        if (!IsFresh(state.MetaSyncedAt, state.EvaluatedAt))
+            return null;
+
+        var linkedCampaignIds = await db.IdentityLinks.AsNoTracking()
+            .Where(l => l.ClientId == clientId
+                        && l.System == ExternalSystem.Meta
+                        && l.Kind == LinkKind.Campaign
+                        && l.InvalidatedAt == null)
+            .Select(l => l.ExternalId)
+            .Distinct()
+            .ToListAsync(ct);
+        if (linkedCampaignIds.Count == 0)
+            return null;
+
+        var campaigns = await db.MetaCampaigns.AsNoTracking()
+            .Where(c => linkedCampaignIds.Contains(c.CampaignId))
+            .Select(c => new { c.CampaignId, c.EffectiveStatus, c.SourceSyncedAt })
+            .ToListAsync(ct);
+        // A missing projection is unknown, not proof that a pause disappeared.
+        if (campaigns.Count != linkedCampaignIds.Count
+            || campaigns.Any(c => !IsFresh(c.SourceSyncedAt, state.EvaluatedAt)))
+            return null;
+
+        var appPausedCampaignIds = (await db.PauseOperations.AsNoTracking()
+                .Where(p => p.ClientId == clientId
+                            && p.EntityType == MetaEntityType.Campaign
+                            && p.State == PauseOperationState.Paused)
+                .Select(p => p.ExternalId)
+                .ToListAsync(ct))
+            .ToHashSet(StringComparer.Ordinal);
+        var hasExternalPause = campaigns.Any(c =>
+            (c.EffectiveStatus is "PAUSED" or "CAMPAIGN_PAUSED")
+            && !appPausedCampaignIds.Contains(c.CampaignId));
+
+        if (!hasExternalPause)
+            return "Auto-resolved from fresh Meta evidence: no linked campaign is still externally paused.";
+
+        // A still-paused campaign only makes this investigation stale when fresh
+        // Stripe evidence disproves the original paid-up premise.
+        if (state.SubscriptionStatus is not ("unpaid" or "canceled")
+            || !IsFresh(state.StripeSyncedAt, state.EvaluatedAt))
+            return null;
+
+        var linkedSubscriptionIds = await db.IdentityLinks.AsNoTracking()
+            .Where(l => l.ClientId == clientId
+                        && l.System == ExternalSystem.Stripe
+                        && l.Kind == LinkKind.Subscription
+                        && l.InvalidatedAt == null)
+            .Select(l => l.ExternalId)
+            .Distinct()
+            .ToListAsync(ct);
+        if (linkedSubscriptionIds.Count == 0)
+            return null;
+
+        var subscriptions = await db.StripeSubscriptions.AsNoTracking()
+            .Where(s => linkedSubscriptionIds.Contains(s.SubscriptionId))
+            .Select(s => new { s.Status, s.SourceSyncedAt })
+            .ToListAsync(ct);
+        if (subscriptions.Count != linkedSubscriptionIds.Count
+            || subscriptions.Any(s => !IsFresh(s.SourceSyncedAt, state.EvaluatedAt))
+            || ClientStateBuilder.BestSubscriptionStatus(subscriptions.Select(s => s.Status)) != state.SubscriptionStatus)
+            return null;
+
+        return $"Auto-resolved from fresh Stripe and Meta evidence: subscription status is {state.SubscriptionStatus}, so the prior paid-up external-pause condition no longer applies.";
+    }
+
+    private static bool IsFresh(DateTimeOffset? syncedAt, DateTimeOffset evaluatedAt)
+    {
+        if (syncedAt is not { } observedAt) return false;
+        var age = evaluatedAt - observedAt;
+        return age >= TimeSpan.Zero && age <= EligibilityPolicy.StalenessBound;
     }
 
     private static async Task<KillSwitchState> GetOrCreateKillSwitchAsync(RdDbContext db, DateTimeOffset now, CancellationToken ct)

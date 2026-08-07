@@ -41,6 +41,7 @@ namespace RD.Tools.Import;
 public static class StripeDiscoveryRunner
 {
     private const string DefaultCrosswalkName = "All Clients - completed Final.xlsx";
+    public const InvestigationKind DelinquentInvestigationKind = InvestigationKind.StripeCustomerDelinquent;
 
     public static async Task<int> RunAsync(string[] args)
     {
@@ -202,7 +203,7 @@ public static class StripeDiscoveryRunner
             }
 
             if (memberSubs.Count == 0) { Flag(InvestigationKind.UnmappedIdentity, "No subscription on any customer in this cluster — inactive, prospect, or stray account?"); noSub++; }
-            if (members.Any(m => m.Delinquent)) { Flag(InvestigationKind.ExternallyPausedPayment, "At least one Stripe customer here is delinquent (unpaid invoice)."); delinquent++; }
+            if (members.Any(m => m.Delinquent)) { Flag(DelinquentInvestigationKind, "At least one Stripe customer here is delinquent (unpaid invoice)."); delinquent++; }
             if (currency != "USD") { Flag(InvestigationKind.NonUsdCurrency, $"Bills in {currency}; v1 policy is USD-only."); nonUsd++; }
             if (isTrial)
             {
