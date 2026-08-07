@@ -9,7 +9,8 @@ public enum ClusterConfidence { Single, High, Medium, Low }
 /// <summary>
 /// A set of Stripe customer records believed to be one business, with the
 /// human-readable signals that grouped them. NEVER treated as a decided merge —
-/// a multi-member cluster is a "confirm or split" task for an operator.
+/// a multi-member cluster requires same-business confirmation; separate-business
+/// cases stay open for manual mapping correction outside this workflow.
 /// </summary>
 public sealed record CustomerCluster(
     IReadOnlyList<StripeCustomerDto> Members,

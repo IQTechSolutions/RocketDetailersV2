@@ -21,12 +21,14 @@ public sealed class AppendOnlyInterceptor : SaveChangesInterceptor
         //                    (the delayed GHL delivery-verification job).
         //   WebhookInboxItem — status fields.
         // So they are NOT in StrictlyImmutable below.
-        typeof(DunningAttempt), typeof(WebhookInboxItem)
+        typeof(DunningAttempt), typeof(WebhookInboxItem),
+        typeof(StripeCustomerPreferenceChange)
     ];
 
     private static readonly Type[] StrictlyImmutable =
     [
-        typeof(LedgerEntry), typeof(Decision)
+        typeof(LedgerEntry), typeof(Decision),
+        typeof(StripeCustomerPreferenceChange)
     ];
 
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)

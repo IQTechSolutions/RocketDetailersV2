@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RD.Domain;
 using RD.Domain.Entities;
+using RD.Infrastructure.Enforcement;
 using RD.Infrastructure.Sync;
 
 namespace RD.Infrastructure.Webhooks;
@@ -60,6 +61,8 @@ public sealed class StripeWebhookIngestor(
             ReceivedAt = now,
         };
 
+        await using var ownershipFence =
+            await ClientMutationFence.AcquireMappingOwnershipAsync(db, ct);
         var tx = await db.Database.BeginTransactionAsync(ct);
         try
         {
@@ -148,6 +151,8 @@ public sealed class StripeWebhookIngestor(
         if (item is null || item.Status == WebhookStatus.Processed)
             return WebhookIngestResult.AlreadyProcessed;
 
+        await using var ownershipFence =
+            await ClientMutationFence.AcquireMappingOwnershipAsync(db, ct);
         var tx = await db.Database.BeginTransactionAsync(ct);
         try
         {
@@ -220,6 +225,9 @@ public sealed class StripeWebhookIngestor(
         var customerId = Str(obj, "customer") ?? "";
         // Basil API versions moved invoice.subscription under parent.subscription_details.
         var subscriptionId = Str(obj, "subscription") ?? NestedSubscription(obj);
+        var convertIntentId = Guid.TryParse(InvoiceConvertIntentId(obj), out var parsedIntentId)
+            ? parsedIntentId
+            : (Guid?)null;
         var status = Str(obj, "status") ?? "";
         var amountDue = MinorToDecimal(Long(obj, "amount_due")) ?? 0m;
         var amountPaid = MinorToDecimal(Long(obj, "amount_paid")) ?? 0m;
@@ -249,6 +257,7 @@ public sealed class StripeWebhookIngestor(
         proj.HostedInvoiceUrl = hostedUrl;
         proj.CreatedAtSource = created;
         proj.DueDate = dueDate;
+        proj.PaidAt = paidAt;
         proj.ClientId = clientId;
         proj.SourceSyncedAt = now;
 
@@ -273,7 +282,8 @@ public sealed class StripeWebhookIngestor(
             // Convert→Bill→Close (rung B): the first payment for a conversion's subscription promotes it.
             // Correlates on the subscription id stamped at billing-execute. Idempotent: the AwaitingPayment
             // guard means a redelivery / poison-replay / renewal invoice never re-promotes (state has moved on).
-            await PromoteConversionAsync(db, subscriptionId, now, ct);
+            await PromoteConversionAsync(
+                db, subscriptionId, customerId, convertIntentId, clientId, now, ct);
         }
 
         return invoiceId;
@@ -289,17 +299,111 @@ public sealed class StripeWebhookIngestor(
     ///     audit-snapshot only; no enforcement decision reads it, so this changes no policy behavior.
     ///   · the GHL contact recorded as the `close`-write target
     /// </summary>
-    private static async Task PromoteConversionAsync(RdDbContext db, string? subscriptionId, DateTimeOffset now, CancellationToken ct)
+    public static async Task PromoteConversionAsync(
+        RdDbContext db,
+        string? subscriptionId,
+        string? customerId,
+        Guid? convertIntentId,
+        Guid? resolvedClientId,
+        DateTimeOffset now,
+        CancellationToken ct)
     {
+        // A subscription payment must identify its subscription. Metadata alone
+        // on a one-off or malformed paid invoice is never enough to promote a
+        // conversion.
         if (string.IsNullOrEmpty(subscriptionId)) return;
 
-        // AwaitingPayment is the normal case; Expired covers a late payment that landed after the sweep
-        // reaped the intent — recovering it rather than stranding a paying client (money-received hole).
-        var intent = await db.ConvertIntents.FirstOrDefaultAsync(
-            i => i.StripeSubscriptionId == subscriptionId
-                 && (i.State == ConvertIntentState.AwaitingPayment || i.State == ConvertIntentState.Expired), ct);
+        // Exact persisted subscription evidence always wins over invoice metadata.
+        // Keep the branches separate: an OR/First query can non-deterministically
+        // select a stale metadata target instead of the exact subscription owner.
+        var exactCandidates = await db.ConvertIntents
+            .Where(i => i.StripeSubscriptionId == subscriptionId
+                        && (i.State == ConvertIntentState.AwaitingPayment
+                            || i.State == ConvertIntentState.Expired))
+            .ToListAsync(ct);
+        var exactMatches = exactCandidates
+            .Where(i => string.Equals(i.StripeSubscriptionId, subscriptionId, StringComparison.Ordinal))
+            .ToList();
+        if (exactMatches.Count > 1)
+            throw new InvalidOperationException(
+                $"Stripe subscription {subscriptionId} matches multiple recoverable conversion intents.");
+
+        var intent = exactMatches.SingleOrDefault();
+
+        // Lost-ack fallback: only the exact frozen intent id on the exact Stripe
+        // customer may adopt a subscription that was not persisted locally yet.
+        if (intent is null && convertIntentId is not null && !string.IsNullOrEmpty(customerId))
+        {
+            var metadataCandidate = await db.ConvertIntents.FirstOrDefaultAsync(
+                i => i.Id == convertIntentId
+                     && i.State == ConvertIntentState.Drafted
+                     && i.BillingStartedAt != null
+                     && i.StripeSubscriptionId == null,
+                ct);
+            if (metadataCandidate is not null
+                && string.Equals(metadataCandidate.StripeCustomerId, customerId, StringComparison.Ordinal))
+            {
+                intent = metadataCandidate;
+            }
+        }
+
         if (intent is null) return;
 
+        // Old deployments could merge a client while a conversion was still in
+        // flight. Never silently mark that payment processed against a different
+        // owner; poison it for deliberate reconciliation instead.
+        if (resolvedClientId is { } resolved && intent.ClientId != resolved)
+        {
+            throw new InvalidOperationException(
+                $"Conversion {intent.Id} belongs to client {intent.ClientId}, but Stripe subscription {subscriptionId} resolves to client {resolved}. Reconcile the merged client before replaying this event.");
+        }
+
+        // Expired intents remain recoverable on late payment. A newer, wholly
+        // unclaimed draft is safe to supersede; anything that may have reached
+        // Stripe represents two possible billing writes and must poison for a
+        // human reconciliation. Save the safe supersede first so SQL Server's
+        // filtered one-active-intent index is released before Expired -> Paid.
+        if (intent.State == ConvertIntentState.Expired)
+        {
+            var newerActive = await db.ConvertIntents.FirstOrDefaultAsync(
+                candidate => candidate.ClientId == intent.ClientId
+                             && candidate.Id != intent.Id
+                             && (candidate.State == ConvertIntentState.Drafted
+                                 || candidate.State == ConvertIntentState.AwaitingPayment
+                                 || candidate.State == ConvertIntentState.Paid),
+                ct);
+            if (newerActive is not null)
+            {
+                var canSafelySupersede = newerActive.State == ConvertIntentState.Drafted
+                                         && newerActive.CreatedAt > intent.CreatedAt
+                                         && newerActive.BillingStartedAt is null
+                                         && string.IsNullOrEmpty(newerActive.StripeSubscriptionId);
+                if (!canSafelySupersede)
+                {
+                    throw new InvalidOperationException(
+                        $"Late payment for conversion {intent.Id} conflicts with in-flight conversion {newerActive.Id}. Reconcile both conversions before replaying this event.");
+                }
+
+                newerActive.State = ConvertIntentState.Failed;
+                newerActive.UpdatedAt = now;
+                db.InvestigationItems.Add(new InvestigationItem
+                {
+                    Id = Guid.NewGuid(),
+                    ClientId = intent.ClientId,
+                    Kind = InvestigationKind.Other,
+                    Detail = $"Unclaimed conversion {newerActive.Id} was superseded when late payment recovered expired conversion {intent.Id}.",
+                    Status = InvestigationStatus.Resolved,
+                    CreatedAt = now,
+                    ResolvedAt = now,
+                    ResolvedBy = "stripe-webhook",
+                    ResolutionNote = "No Stripe write had started on the newer draft; the exact paid subscription evidence took precedence.",
+                });
+                await db.SaveChangesAsync(ct);
+            }
+        }
+
+        if (!string.IsNullOrEmpty(subscriptionId))
+            intent.StripeSubscriptionId = subscriptionId;
         intent.State = ConvertIntentState.Paid;
         intent.UpdatedAt = now;
 
@@ -315,7 +419,10 @@ public sealed class StripeWebhookIngestor(
         // live subscription once this flips.
         var client = await db.Clients.FirstOrDefaultAsync(c => c.Id == intent.ClientId, ct);
         if (client is not null)
+        {
             client.ContractType = ContractType.Paid;
+            client.AccountType = intent.AccountType;
+        }
 
         // Shadow record for the (spike-gated) `close` tag write: resolve the client's GHL contact now.
         // No GHL call — this just captures the write target so the live write, when enabled, knows where
@@ -325,6 +432,35 @@ public sealed class StripeWebhookIngestor(
                         && l.Kind == LinkKind.Contact && l.InvalidatedAt == null)
             .Select(l => l.ExternalId)
             .FirstOrDefaultAsync(ct);
+    }
+
+    private static string? InvoiceConvertIntentId(JsonElement invoice)
+    {
+        static string? FromMetadata(JsonElement owner)
+        {
+            if (!owner.TryGetProperty("metadata", out var metadata)
+                || metadata.ValueKind != JsonValueKind.Object)
+                return null;
+            return Str(metadata, "convert_intent_id");
+        }
+
+        var direct = FromMetadata(invoice);
+        if (direct is not null) return direct;
+
+        if (invoice.TryGetProperty("subscription_details", out var details)
+            && details.ValueKind == JsonValueKind.Object)
+        {
+            var legacy = FromMetadata(details);
+            if (legacy is not null) return legacy;
+        }
+
+        if (invoice.TryGetProperty("parent", out var parent)
+            && parent.ValueKind == JsonValueKind.Object
+            && parent.TryGetProperty("subscription_details", out var parentDetails)
+            && parentDetails.ValueKind == JsonValueKind.Object)
+            return FromMetadata(parentDetails);
+
+        return null;
     }
 
     private async Task<string> ProcessSubscriptionAsync(

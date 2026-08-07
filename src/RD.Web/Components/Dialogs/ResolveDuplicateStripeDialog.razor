@@ -1,48 +1,103 @@
 @using RD.Domain
-@* Resolve a duplicate-Stripe-customer item by choosing which customer to KEEP; the others are invalidated. Returns the chosen external id. *@
+@* Choose the Stripe customer preferred for new subscriptions. All linked accounts remain active and monitored. *@
 
 <MudDialog>
     <TitleContent>
-        <MudText Typo="Typo.h6">Resolve duplicate Stripe customers@(string.IsNullOrEmpty(ClientName) ? "" : $" — {ClientName}")</MudText>
+        <MudText Typo="Typo.h6">Choose preferred Stripe customer@(string.IsNullOrEmpty(ClientName) ? "" : $" — {ClientName}")</MudText>
     </TitleContent>
     <DialogContent>
         <MudText Typo="Typo.body2" Class="mud-text-secondary mb-1">
-            This client has more than one active Stripe customer — a double-billing risk. Choose the customer to <b>keep</b>;
-            the others are invalidated (their links are marked inactive, not deleted).
+            The preferred customer is used when Rocket Detailer creates a <b>new subscription</b>.
+            Existing subscriptions, invoices, and charges stay on their current Stripe accounts, and
+            <b>all linked accounts remain active and monitored</b>.
         </MudText>
         <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mb-3">
-            Not sure which is right? Open each in Stripe to compare before choosing.
+            @if (ConfirmSameBusiness)
+            {
+                <span>Confirm ownership below. If the accounts belong to different businesses, cancel and leave the investigation open for manual mapping correction outside this workflow.</span>
+            }
+            else
+            {
+                <span>An operator can change this preference again later from Client details.</span>
+            }
         </MudText>
 
-        <MudRadioGroup T="string" @bind-Value="_keep">
-            @foreach (var candidate in Candidates)
+        @if (HasCurrentPreference)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                The current preference is preselected. Review the evidence before saving a change.
+                <span class="d-block mt-1">@Choice.RecommendationReason</span>
+            </MudAlert>
+        }
+        else if (HasRecommendation && Choice.CanAutoApply)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                <b>Safe recommendation:</b> @Choice.RecommendationReason
+            </MudAlert>
+        }
+        else if (HasRecommendation)
+        {
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                <b>Suggested choice — verify before saving:</b> @Choice.RecommendationReason It is preselected, and you can choose another account now or change it later.
+            </MudAlert>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                <b>No safe recommendation.</b> @Choice.RecommendationReason Review the accounts and select one to continue.
+            </MudAlert>
+        }
+
+        <MudRadioGroup T="string" @bind-Value="_selected" aria-label="Preferred Stripe customer">
+            @foreach (var candidate in Choice.Candidates)
             {
+                var isCurrent = string.Equals(candidate.ExternalId, Choice.CurrentPreferredExternalId, StringComparison.Ordinal);
+                var isRecommended = string.Equals(candidate.ExternalId, Choice.RecommendedExternalId, StringComparison.Ordinal);
+
                 <MudPaper Outlined="true" Elevation="0" Class="pa-2 mb-2">
-                    <MudRadio T="string" Value="@candidate.ExternalId" Color="Color.Primary" Dense="true">
-                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                        <MudRadio T="string" Value="@candidate.ExternalId" Color="Color.Primary" Dense="true" Style="flex:1;">
                             <div style="flex:1;min-width:12rem;">
-                                <MudText Typo="Typo.body2" Style="font-weight:600;">
-                                    <code style="font-size:.72rem;">@candidate.ExternalId</code>
-                                </MudText>
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
+                                    <MudText Typo="Typo.body2" Style="font-weight:600;">
+                                        <code style="font-size:.72rem;">@candidate.ExternalId</code>
+                                    </MudText>
+                                    @if (isCurrent)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success">Current</MudChip>
+                                    }
+                                    @if (isRecommended)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info">
+                                            @(Choice.CanAutoApply ? "Recommended" : "Suggested")
+                                        </MudChip>
+                                    }
+                                </MudStack>
                                 <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">@candidate.Detail</MudText>
                             </div>
-                            <MudTooltip Arrow="true" Text="Open this customer in Stripe">
-                                <MudIconButton Href="@StripeUrl(candidate.ExternalId)" Target="_blank" rel="noopener noreferrer"
-                                               Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small"
-                                               aria-label="Open this customer in Stripe" />
-                            </MudTooltip>
-                        </MudStack>
-                    </MudRadio>
+                        </MudRadio>
+                        <MudTooltip Arrow="true" Text="Open this customer in Stripe">
+                            <MudIconButton Href="@StripeUrl(candidate.ExternalId)" Target="_blank" rel="noopener noreferrer"
+                                           Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small"
+                                           aria-label="@($"Open customer {candidate.ExternalId} in Stripe")" />
+                        </MudTooltip>
+                    </MudStack>
                 </MudPaper>
             }
         </MudRadioGroup>
+
+        @if (ConfirmSameBusiness)
+        {
+            <MudCheckBox T="bool" @bind-Value="_sameBusinessConfirmed" Color="Color.Primary" Class="mt-2"
+                         Label="I confirm these Stripe customer accounts belong to this business" />
+        }
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="@(() => Dialog!.Cancel())">Cancel</MudButton>
         <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                   Disabled="@string.IsNullOrWhiteSpace(_keep)"
-                   OnClick="@(() => Dialog!.Close(DialogResult.Ok(_keep!)))">
-            Keep this customer
+                   Disabled="@(string.IsNullOrWhiteSpace(_selected) || (ConfirmSameBusiness && !_sameBusinessConfirmed))"
+                   OnClick="@(() => Dialog!.Close(DialogResult.Ok(_selected!)))">
+            @(ConfirmSameBusiness ? "Confirm business & save preference" : "Save preference")
         </MudButton>
     </DialogActions>
 </MudDialog>
@@ -50,13 +105,39 @@
 @code {
     [CascadingParameter] private IMudDialogInstance? Dialog { get; set; }
 
-    [Parameter, EditorRequired] public IReadOnlyList<StripeCustomerCandidate> Candidates { get; set; } = [];
+    [Parameter, EditorRequired] public StripeCustomerChoice Choice { get; set; }
+        = new([], null, "No safe recommendation is available.", null);
     [Parameter] public string? ClientName { get; set; }
+    [Parameter] public bool ConfirmSameBusiness { get; set; }
 
     /// <summary>Injected so the dialog's per-customer "open in Stripe" links honour test-vs-live.</summary>
     [Inject] private VendorLinks Vendor { get; set; } = default!;
 
-    private string? _keep;
+    private string? _selected;
+    private bool _sameBusinessConfirmed;
+    private StripeCustomerChoice? _initializedChoice;
+
+    private bool HasCurrentPreference => Choice.Candidates.Any(c =>
+        string.Equals(c.ExternalId, Choice.CurrentPreferredExternalId, StringComparison.Ordinal));
+
+    private bool HasRecommendation => Choice.Candidates.Any(c =>
+        string.Equals(c.ExternalId, Choice.RecommendedExternalId, StringComparison.Ordinal));
+
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_initializedChoice, Choice)) return;
+        _initializedChoice = Choice;
+        _sameBusinessConfirmed = false;
+
+        var current = HasCurrentPreference
+            ? Choice.CurrentPreferredExternalId
+            : null;
+        var recommendation = HasRecommendation
+            ? Choice.RecommendedExternalId
+            : null;
+
+        _selected = current ?? recommendation;
+    }
 
     private string StripeUrl(string customerId)
         => Vendor.For(ExternalSystem.Stripe, LinkKind.Customer, customerId) ?? "";

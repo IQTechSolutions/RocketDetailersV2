@@ -14,6 +14,14 @@ public interface IStripeGateway
     Task<IReadOnlyList<StripeSubscriptionDto>> ListSubscriptionsAsync(CancellationToken ct);
 
     /// <summary>
+    /// Live paginated subscription read for one customer. Billing uses this
+    /// immediately before a create so a newer subscription than the last sweep
+    /// cannot be duplicated.
+    /// </summary>
+    Task<IReadOnlyList<StripeSubscriptionDto>> ListSubscriptionsForCustomerAsync(
+        string customerId, CancellationToken ct);
+
+    /// <summary>
     /// Paginated invoice listing. <paramref name="status"/> filters by Stripe
     /// invoice status (e.g. "open"); <paramref name="createdOnOrAfter"/> maps
     /// to created[gte]. The sync job calls this twice: all open invoices
@@ -87,7 +95,9 @@ public sealed record StripeSubscriptionDto(
     string CurrencyCode,
     string? PriceInterval,
     decimal? Amount,
-    DateTimeOffset? CanceledAt);
+    DateTimeOffset? CanceledAt,
+    string? PriceId = null,
+    string? ConvertIntentId = null);
 
 public sealed record StripeInvoiceDto(
     string Id,
@@ -150,7 +160,18 @@ public sealed class StripeGateway : IStripeGateway
         }
     }
 
-    public async Task<IReadOnlyList<StripeSubscriptionDto>> ListSubscriptionsAsync(CancellationToken ct)
+    public Task<IReadOnlyList<StripeSubscriptionDto>> ListSubscriptionsAsync(CancellationToken ct)
+        => ListSubscriptionsCoreAsync(customerId: null, ct);
+
+    public Task<IReadOnlyList<StripeSubscriptionDto>> ListSubscriptionsForCustomerAsync(
+        string customerId, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(customerId);
+        return ListSubscriptionsCoreAsync(customerId.Trim(), ct);
+    }
+
+    private async Task<IReadOnlyList<StripeSubscriptionDto>> ListSubscriptionsCoreAsync(
+        string? customerId, CancellationToken ct)
     {
         var results = new List<StripeSubscriptionDto>();
         string? startingAfter = null;
@@ -159,6 +180,7 @@ public sealed class StripeGateway : IStripeGateway
             if (page >= MaxPages) throw new InvalidOperationException("Stripe subscription pagination exceeded the page cap.");
 
             var url = $"v1/subscriptions?limit={PageSize}&status=all";
+            if (customerId is not null) url += $"&customer={Uri.EscapeDataString(customerId)}";
             if (startingAfter is not null) url += $"&starting_after={Uri.EscapeDataString(startingAfter)}";
 
             var envelope = await GetAsync<StripeListJson<SubscriptionJson>>(url, ct);
@@ -304,7 +326,9 @@ public sealed class StripeGateway : IStripeGateway
             (price?.Currency ?? s.Currency ?? "usd").ToUpperInvariant(),
             price?.Recurring?.Interval,
             MinorToDecimal(price?.UnitAmount),
-            FromUnix(s.CanceledAt));
+            FromUnix(s.CanceledAt),
+            price?.Id,
+            s.Metadata?.GetValueOrDefault("convert_intent_id"));
     }
 
     private static StripeInvoiceDto ToDto(InvoiceJson i) => new(
@@ -363,6 +387,7 @@ public sealed class StripeGateway : IStripeGateway
         [JsonPropertyName("currency")] public string? Currency { get; set; }
         [JsonPropertyName("canceled_at")] public long? CanceledAt { get; set; }
         [JsonPropertyName("items")] public ItemsJson? Items { get; set; }
+        [JsonPropertyName("metadata")] public Dictionary<string, string>? Metadata { get; set; }
     }
 
     private sealed class ItemsJson
@@ -377,6 +402,7 @@ public sealed class StripeGateway : IStripeGateway
 
     private sealed class PriceJson
     {
+        [JsonPropertyName("id")] public string? Id { get; set; }
         [JsonPropertyName("unit_amount")] public long? UnitAmount { get; set; }
         [JsonPropertyName("currency")] public string? Currency { get; set; }
         [JsonPropertyName("recurring")] public RecurringJson? Recurring { get; set; }

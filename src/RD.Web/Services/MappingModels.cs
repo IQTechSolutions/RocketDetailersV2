@@ -63,9 +63,15 @@ public sealed record RequiredSlot(
     LinkKind Kind,
     string Label,
     string HelpText,
-    LinkView? Active)
+    LinkView? Active,
+    IReadOnlyList<LinkView>? AdditionalActive = null)
 {
     public bool Present => Active is not null;
+    public IReadOnlyList<LinkView> ActiveLinks => Active is null
+        ? []
+        : AdditionalActive is { Count: > 0 }
+            ? [Active, .. AdditionalActive]
+            : [Active];
 }
 
 /// <summary>Resolved facts for one linked Meta campaign — the raw material of the blast-radius number.</summary>
@@ -115,8 +121,41 @@ public sealed record ClientMappingDetail(
 /// <summary>A candidate external id the wizard can suggest for a missing link, before name ranking.</summary>
 public sealed record SuggestionCandidate(string ExternalId, string Label, DateTimeOffset SyncedAt, string? Detail = null);
 
-/// <summary>One of a client's active Stripe customers, offered as the "keep this one" choice when resolving a duplicate-customer investigation.</summary>
-public sealed record StripeCustomerCandidate(string ExternalId, string Detail);
+/// <summary>One active Stripe customer plus the evidence used to choose a preferred billing account.</summary>
+public sealed record StripeCustomerCandidate(
+    string ExternalId,
+    string Detail,
+    IReadOnlyList<string> SubscriptionStatuses,
+    DateTimeOffset? LatestPaidSubscriptionInvoiceAt);
+
+/// <summary>
+/// The exact active customer-link identity/version shown in a confirmation
+/// dialog. Resolution compares the complete set so an unseen concurrent mapping
+/// change can never be included in the operator's same-business confirmation.
+/// </summary>
+public sealed record StripeCustomerLinkStamp(Guid LinkId, string ExternalId, int LinkVersion);
+
+/// <summary>
+/// The full choice presented to an operator. A recommendation is deliberately
+/// nullable: stale or conflicting evidence must result in an explicit choice.
+/// </summary>
+public sealed record StripeCustomerChoice(
+    IReadOnlyList<StripeCustomerCandidate> Candidates,
+    string? RecommendedExternalId,
+    string RecommendationReason,
+    string? CurrentPreferredExternalId,
+    bool CanAutoApply = false)
+{
+    public IReadOnlyList<StripeCustomerLinkStamp> CustomerLinks { get; init; } = [];
+}
+
+/// <summary>Outcome of applying only high-confidence recommendations to the open queue.</summary>
+public sealed record StripeCustomerBulkResult(
+    bool Ok,
+    int Applied,
+    int AlreadyPreferred,
+    int NeedsReview,
+    string Message);
 
 /// <summary>A ranked link suggestion the operator can accept — best-effort, always labeled as a suggestion.</summary>
 public sealed record LinkSuggestion(string ExternalId, string Label, string? Detail, double Score, string Rationale);

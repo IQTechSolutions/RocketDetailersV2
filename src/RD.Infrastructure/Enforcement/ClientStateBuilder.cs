@@ -16,21 +16,14 @@ public sealed class ClientStateBuilder(IClock clock, Microsoft.Extensions.Option
 {
     private readonly EnforcementOptions _enf = enforcement.Value;
 
-    /// <summary>Ambient facts shared across a batch — loaded once by the caller, not per client.</summary>
-    /// <param name="MergedInto">survivor id → the ids of clients retired into it. A merged
-    /// duplicate's append-only ledger keeps its own ClientId, so the survivor's balance must
-    /// roll those rows up. Empty for the vast majority of clients (merges are rare).</param>
-    public sealed record Context(DateTimeOffset? StripeSyncedAt, DateTimeOffset? MetaSyncedAt, ILookup<Guid, Guid> MergedInto);
+    /// <summary>Vendor freshness facts shared across a policy-evaluation batch.</summary>
+    public sealed record Context(DateTimeOffset? StripeSyncedAt, DateTimeOffset? MetaSyncedAt);
 
     public async Task<Context> LoadContextAsync(RdDbContext db, CancellationToken ct)
     {
         var stripe = await LatestCompleted(db, ExternalSystem.Stripe, ct);
         var meta = await LatestCompleted(db, ExternalSystem.Meta, ct);
-        var merges = await db.Clients.AsNoTracking()
-            .Where(c => c.MergedIntoClientId != null)
-            .Select(c => new { Survivor = c.MergedIntoClientId!.Value, Duplicate = c.Id })
-            .ToListAsync(ct);
-        return new Context(stripe, meta, merges.ToLookup(m => m.Survivor, m => m.Duplicate));
+        return new Context(stripe, meta);
     }
 
     /// <summary>Build one client's state. Loads only that client's rows — safe to call for a single revalidation.</summary>
@@ -44,12 +37,19 @@ public sealed class ClientStateBuilder(IClock clock, Microsoft.Extensions.Option
         // all and take the most-active status: one active sub makes the client
         // billable even if another is canceled, so "best status" never pauses a
         // paying client. Per-subscription delinquency is still caught below via the
-        // ClientId-scoped open-invoice signals.
+        // whole linked-customer/subscription cluster's open-invoice signals.
         var subExternalIds = links.Where(l => l is { System: ExternalSystem.Stripe, Kind: LinkKind.Subscription })
             .Select(l => l.ExternalId).ToList();
-        List<StripeSubscriptionProj> subs = subExternalIds.Count == 0
+        var customerExternalIds = links
+            .Where(l => l is { System: ExternalSystem.Stripe, Kind: LinkKind.Customer })
+            .Select(l => l.ExternalId)
+            .ToList();
+        List<StripeSubscriptionProj> subs = subExternalIds.Count == 0 && customerExternalIds.Count == 0
             ? []
-            : await db.StripeSubscriptions.AsNoTracking().Where(s => subExternalIds.Contains(s.SubscriptionId)).ToListAsync(ct);
+            : await db.StripeSubscriptions.AsNoTracking()
+                .Where(s => subExternalIds.Contains(s.SubscriptionId)
+                            || customerExternalIds.Contains(s.CustomerId))
+                .ToListAsync(ct);
         var effectiveSubStatus = BestSubscriptionStatus(subs.Select(s => s.Status));
 
         var campaignIds = links.Where(l => l is { System: ExternalSystem.Meta, Kind: LinkKind.Campaign })
@@ -65,7 +65,10 @@ public sealed class ClientStateBuilder(IClock clock, Microsoft.Extensions.Option
             .ToList();
 
         var openInvoices = await db.StripeInvoices.AsNoTracking()
-            .Where(i => i.ClientId == client.Id && (i.Status == "open" || i.Status == "uncollectible"))
+            .Where(i => (i.ClientId == client.Id
+                         || customerExternalIds.Contains(i.CustomerId)
+                         || (i.SubscriptionId != null && subExternalIds.Contains(i.SubscriptionId)))
+                        && (i.Status == "open" || i.Status == "uncollectible"))
             .ToListAsync(ct);
 
         var dunningCase = await db.DunningCases.AsNoTracking()
@@ -80,9 +83,14 @@ public sealed class ClientStateBuilder(IClock clock, Microsoft.Extensions.Option
             .FirstOrDefaultAsync(ct);
 
         // Roll up the client's own ledger plus that of any duplicates retired into
-        // it — those rows are append-only and keep the duplicate's ClientId.
-        var ledgerClientIds = new List<Guid> { client.Id };
-        ledgerClientIds.AddRange(ctx.MergedInto[client.Id]);
+        // it — those rows are append-only and keep the duplicate's ClientId. Read
+        // membership here so a caller holding the mutation fence sees the latest
+        // committed merge/unmerge rather than an earlier batch snapshot.
+        var ledgerClientIds = await db.Clients.AsNoTracking()
+            .Where(candidate => candidate.Id == client.Id
+                                || candidate.MergedIntoClientId == client.Id)
+            .Select(candidate => candidate.Id)
+            .ToListAsync(ct);
         var ledger = await db.LedgerEntries.AsNoTracking()
             .Where(l => ledgerClientIds.Contains(l.ClientId))
             .GroupBy(l => l.Type)
@@ -104,8 +112,14 @@ public sealed class ClientStateBuilder(IClock clock, Microsoft.Extensions.Option
         // wizard; here we require a current, non-invalidated verification so a
         // client whose links drifted (verification invalidated) falls back to
         // "unmapped" and the policy demotes.
-        var hasCurrentVerification = await db.MappingVerifications.AsNoTracking()
-            .AnyAsync(v => v.ClientId == client.Id && v.InvalidatedAt == null, ct);
+        var currentVerificationJson = await db.MappingVerifications.AsNoTracking()
+            .Where(v => v.ClientId == client.Id && v.InvalidatedAt == null)
+            .OrderByDescending(v => v.VerifiedAt)
+            .Select(v => v.VerifiedLinksJson)
+            .FirstOrDefaultAsync(ct);
+        var hasCurrentVerification = MappingVerificationCoverage.PinsAll(
+            currentVerificationJson,
+            links.Where(IsRequiredMappingLink).Select(l => (l.Id, l.LinkVersion)));
 
         return new ClientState
         {
@@ -135,6 +149,11 @@ public sealed class ClientStateBuilder(IClock clock, Microsoft.Extensions.Option
             EvaluatedAt = now,
         };
     }
+
+    private static bool IsRequiredMappingLink(IdentityLink link) =>
+        link is { System: ExternalSystem.Stripe, Kind: LinkKind.Customer or LinkKind.Subscription }
+            or { System: ExternalSystem.Meta, Kind: LinkKind.Campaign }
+            or { System: ExternalSystem.Ghl, Kind: LinkKind.Contact };
 
     /// <summary>
     /// Next-step timing is derived from a cadence, not from pre-created attempt

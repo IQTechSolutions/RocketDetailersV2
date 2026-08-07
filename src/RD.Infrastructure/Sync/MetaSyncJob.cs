@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RD.Domain;
 using RD.Domain.Entities;
+using RD.Infrastructure.Enforcement;
 using RD.Infrastructure.Gateways;
 
 namespace RD.Infrastructure.Sync;
@@ -53,6 +54,12 @@ public sealed class MetaSyncJob(
         // job); a larger InsightsLookbackDays powers a one-off spend backfill.
         var since = today.AddDays(-Math.Max(1, o.InsightsLookbackDays));
 
+        var campaigns = await meta.ListCampaignsAsync(o.AdAccountId, ct);
+        var insights = await meta.GetDailyInsightsAsync(o.AdAccountId, since, today, ct);
+
+        await using var ownershipFence =
+            await ClientMutationFence.AcquireMappingOwnershipAsync(db, ct);
+
         var campaignToClient = (await db.IdentityLinks
                 .Where(l => l.System == ExternalSystem.Meta && l.Kind == LinkKind.Campaign && l.InvalidatedAt == null)
                 .Select(l => new { l.ExternalId, l.ClientId })
@@ -60,7 +67,6 @@ public sealed class MetaSyncJob(
             .ToDictionary(l => l.ExternalId, l => l.ClientId);
 
         // --- Campaigns: complete cursor-paginated sweep, then upsert.
-        var campaigns = await meta.ListCampaignsAsync(o.AdAccountId, ct);
         var campaignProjections = await db.MetaCampaigns.ToDictionaryAsync(p => p.CampaignId, ct);
         foreach (var campaign in campaigns)
         {
@@ -87,7 +93,6 @@ public sealed class MetaSyncJob(
         }
 
         // --- Insights: [since .. today], daily granularity.
-        var insights = await meta.GetDailyInsightsAsync(o.AdAccountId, since, today, ct);
         var insightProjections = await db.MetaInsightsDaily
             .Where(i => i.Date >= since)
             .ToDictionaryAsync(i => (i.CampaignId, i.Date), ct);

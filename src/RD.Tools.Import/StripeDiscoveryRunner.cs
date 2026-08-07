@@ -29,7 +29,7 @@ namespace RD.Tools.Import;
 /// The CUSTOMER NAME is the client's identity and the reconciliation key; the
 /// sheet's business-name column is a CATEGORY label only (carried in Notes), never
 /// the identity. Clustering NEVER auto-decides: a multi-member cluster is persisted
-/// pre-grouped but carries a "CONFIRM or SPLIT" investigation, because a shared
+/// pre-grouped but carries a same-business confirmation investigation, because a shared
 /// normalized customer name can genuinely belong to two different clients. The
 /// --crosswalk sheet ("All Clients" master) maps Stripe customer id → category
 /// (and, in the link verbs, → Meta campaign / GHL contact / Master flag).
@@ -192,13 +192,15 @@ public static class StripeDiscoveryRunner
                 flags++;
             }
 
-            // The one-at-a-time task: a pre-grouped cluster to confirm or split.
+            // The one-at-a-time task: confirm a pre-grouped cluster. Separate
+            // businesses remain open for manual mapping correction.
             if (members.Count > 1)
             {
                 var roster = string.Join("; ", members.Take(12).Select(m => $"{m.Id} <{m.Email ?? "no email"}>"))
                              + (members.Count > 12 ? $" (+{members.Count - 12} more)" : "");
                 Flag(InvestigationKind.DuplicateStripeCustomer,
-                    $"CONFIRM or SPLIT — {members.Count} Stripe customers grouped as one business [{cluster.Confidence}]. " +
+                    $"CONFIRM SAME BUSINESS — {members.Count} Stripe customers grouped together [{cluster.Confidence}]. " +
+                    "If they are separate businesses, leave this open for manual mapping correction. " +
                     $"Signals: {(cluster.Signals.Count > 0 ? string.Join("; ", cluster.Signals) : "n/a")}. Members: {roster}.");
             }
 

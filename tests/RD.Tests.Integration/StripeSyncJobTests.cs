@@ -1,7 +1,10 @@
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RD.Domain;
+using RD.Domain.Entities;
+using RD.Infrastructure.Enforcement;
 using RD.Infrastructure.Gateways;
 using RD.Infrastructure.Sync;
 using RD.Tests.Integration.TestInfra;
@@ -73,10 +76,12 @@ public sealed class StripeSyncJobTests : IDisposable
         openInvoice.SubscriptionId.Should().Be("sub_1");
         openInvoice.HostedInvoiceUrl.Should().Be("https://invoice.stripe.com/i/in_open1");
         openInvoice.DueDate.Should().Be(DateTimeOffset.FromUnixTimeSeconds(1784764800));
+        openInvoice.PaidAt.Should().BeNull();
         var paidInvoice = invoices.Single(i => i.InvoiceId == "in_paid1");
         paidInvoice.ClientId.Should().Be(clientId);
         // Basil parent.subscription_details shape must still yield the join key.
         paidInvoice.SubscriptionId.Should().Be("sub_1");
+        paidInvoice.PaidAt.Should().Be(DateTimeOffset.FromUnixTimeSeconds(1784592000));
         invoices.Single(i => i.InvoiceId == "in_paid2").ClientId.Should().BeNull();
 
         // --- Money-IN comes from CHARGES: one invoiced (⇒ subscription, keyed by
@@ -117,6 +122,67 @@ public sealed class StripeSyncJobTests : IDisposable
         subscriptionRequests.Should().OnlyContain(e =>
             e.Header("Stripe-Version") == "2025-03-31.basil" // sent when configured; unset pin = account default
             && e.Header("Authorization") == "Bearer rk_test_dummy");
+    }
+
+    [Fact]
+    public async Task Attribution_reloads_identity_ownership_after_vendor_reads_and_before_ledger_commit()
+    {
+        var originalClientId = _db.SeedClientWithLink(
+            ExternalSystem.Stripe, LinkKind.Customer, "cus_map1",
+            (ExternalSystem.Stripe, LinkKind.Subscription, "sub_1"));
+        Guid newOwnerId;
+        await using (var seed = _db.CreateContext())
+        {
+            var newOwner = new Client
+            {
+                Id = Guid.NewGuid(), BusinessName = "New owner",
+                ContractType = ContractType.Paid, AccountType = AccountType.Own,
+                CreatedAt = _clock.UtcNow,
+            };
+            newOwnerId = newOwner.Id;
+            seed.Clients.Add(newOwner);
+            await seed.SaveChangesAsync();
+        }
+        StubSubscriptionPages();
+        StubInvoices();
+        StubCharges();
+
+        await using var ownershipDb = _db.CreateContext();
+        var ownershipFence = await ClientMutationFence.AcquireMappingOwnershipAsync(ownershipDb);
+        Task? runTask = null;
+        try
+        {
+            runTask = CreateJob().RunAsync(CancellationToken.None);
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (_server.LogEntries.Count < 5 && DateTime.UtcNow < deadline)
+                await Task.Delay(20);
+            _server.LogEntries.Count.Should().BeGreaterThanOrEqualTo(5,
+                "the sync must finish vendor reads before this ownership move");
+            runTask.IsCompleted.Should().BeFalse("the sync must wait at the ownership barrier");
+
+            var movedLinks = await ownershipDb.IdentityLinks
+                .Where(link => link.ClientId == originalClientId
+                               && link.System == ExternalSystem.Stripe)
+                .ToListAsync();
+            foreach (var link in movedLinks)
+            {
+                link.ClientId = newOwnerId;
+                link.LinkVersion++;
+            }
+            await ownershipDb.SaveChangesAsync();
+        }
+        finally
+        {
+            await ownershipFence.DisposeAsync();
+        }
+
+        await runTask!;
+        await using var verify = _db.CreateContext();
+        (await verify.LedgerEntries.Where(entry => entry.SourceSystem == ExternalSystem.Stripe)
+                .ToListAsync())
+            .Should().OnlyContain(entry => entry.ClientId == newOwnerId);
+        (await verify.StripeSubscriptions.FindAsync("sub_1"))!.ClientId.Should().Be(newOwnerId);
+        (await verify.StripeInvoices.FindAsync("in_paid1"))!.ClientId.Should().Be(newOwnerId);
     }
 
     private void StubSubscriptionPages()

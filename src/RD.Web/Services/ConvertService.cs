@@ -2,7 +2,9 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RD.Domain;
 using RD.Domain.Entities;
+using RD.Domain.Policy;
 using RD.Infrastructure;
+using RD.Infrastructure.Enforcement;
 
 namespace RD.Web.Services;
 
@@ -44,7 +46,10 @@ public sealed record ConversionRow(
 /// The billing draft (A1), Stripe execution + `close` GHL tag write (B), and Auto promotion (C)
 /// are NOT here. This never touches Stripe or GHL.
 /// </summary>
-public class ConvertService(IDbContextFactory<RdDbContext> factory, IClock clock)
+public class ConvertService(
+    IDbContextFactory<RdDbContext> factory,
+    IClock clock,
+    Func<Guid, CancellationToken, Task>? afterClientFence = null)
 {
     private const string DefaultActor = "operator";
 
@@ -69,6 +74,12 @@ public class ConvertService(IDbContextFactory<RdDbContext> factory, IClock clock
         Guid clientId, AccountType accountType, Guid? packageId, string? actor = null, CancellationToken ct = default)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
+        // Serialize intent creation with merge/unmerge and billing. Without this
+        // fence a merge could prove "no conversion", retire the client, and then
+        // lose a racing Drafted insert onto the retired shell.
+        await using var mutationFence = await ClientMutationFence.AcquireAsync(db, clientId, ct);
+        if (afterClientFence is not null)
+            await afterClientFence(clientId, ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         var now = clock.UtcNow;
 
@@ -121,7 +132,7 @@ public class ConvertService(IDbContextFactory<RdDbContext> factory, IClock clock
 
         // A1 (Shadow): compute the Stripe action this conversion WOULD take — no Stripe calls —
         // and record it on the intent as the reconciliation snapshot.
-        var draftInput = await LoadDraftInputAsync(db, client, accountType, resolvedPackageId, ct);
+        var draftInput = await LoadDraftInputAsync(db, client, accountType, resolvedPackageId, now, ct);
         var draft = ConvertDrafter.Draft(draftInput);
 
         var intent = new ConvertIntent
@@ -158,7 +169,7 @@ public class ConvertService(IDbContextFactory<RdDbContext> factory, IClock clock
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         var client = await db.Clients.AsNoTracking().FirstOrDefaultAsync(c => c.Id == clientId, ct);
-        if (client is null) return null;
+        if (client is null || client.MergedIntoClientId is not null) return null;
 
         var intent = await db.ConvertIntents.AsNoTracking()
             .Where(i => i.ClientId == clientId
@@ -170,7 +181,11 @@ public class ConvertService(IDbContextFactory<RdDbContext> factory, IClock clock
             .FirstOrDefaultAsync(ct);
         if (intent is null) return null;
 
-        var input = await LoadDraftInputAsync(db, client, intent.AccountType, intent.PackageId, ct);
+        if (intent.BillingStartedAt is not null && TryReadDraft(intent.DraftedActionJson, out var frozenDraft))
+            return new ActiveConvertDraft(intent.Id, intent.State, intent.CreatedAt, frozenDraft!);
+
+        var input = await LoadDraftInputAsync(
+            db, client, intent.AccountType, intent.PackageId, clock.UtcNow, ct);
         return new ActiveConvertDraft(intent.Id, intent.State, intent.CreatedAt, ConvertDrafter.Draft(input));
     }
 
@@ -203,7 +218,8 @@ public class ConvertService(IDbContextFactory<RdDbContext> factory, IClock clock
 
     /// <summary>Snapshot the draft inputs from SQL projections for the pure <see cref="ConvertDrafter"/>. Shared with billing execute.</summary>
     internal static async Task<ConvertDraftInput> LoadDraftInputAsync(
-        RdDbContext db, Client client, AccountType accountType, Guid? packageId, CancellationToken ct)
+        RdDbContext db, Client client, AccountType accountType, Guid? packageId,
+        DateTimeOffset now, CancellationToken ct)
     {
         string? priceId = null;
         if (packageId is { } pid)
@@ -216,14 +232,89 @@ public class ConvertService(IDbContextFactory<RdDbContext> factory, IClock clock
                 .FirstOrDefaultAsync(ct);
         }
 
-        // First customer in the client's Stripe cluster — deterministic order so the choice is reproducible.
-        var firstCustomer = await db.IdentityLinks.AsNoTracking()
+        // A multi-customer business must have an explicit preferred billing
+        // customer. Never choose an arbitrary first row: that could create a
+        // subscription on the wrong Stripe account. A single linked customer is
+        // unambiguous and remains the safe fallback.
+        var activeCustomers = await db.IdentityLinks.AsNoTracking()
             .Where(l => l.ClientId == client.Id && l.System == ExternalSystem.Stripe
                         && l.Kind == LinkKind.Customer && l.InvalidatedAt == null)
-            .OrderBy(l => l.CreatedAt).ThenBy(l => l.ExternalId)
             .Select(l => l.ExternalId)
-            .FirstOrDefaultAsync(ct);
+            .OrderBy(id => id)
+            .ToListAsync(ct);
+        var activeSubscriptionIds = await db.IdentityLinks.AsNoTracking()
+            .Where(l => l.ClientId == client.Id && l.System == ExternalSystem.Stripe
+                        && l.Kind == LinkKind.Subscription && l.InvalidatedAt == null)
+            .Select(l => l.ExternalId)
+            .Distinct()
+            .ToListAsync(ct);
 
-        return new ConvertDraftInput(accountType, client.CurrencyCode, packageId is not null, priceId, firstCustomer);
+        var preferredCustomer = client.PreferredStripeCustomerId is { Length: > 0 } preferred
+                                && activeCustomers.Contains(preferred, StringComparer.Ordinal)
+            ? preferred
+            : activeCustomers.Count == 1
+                ? activeCustomers[0]
+                : null;
+        var ambiguousCustomers = activeCustomers.Count > 1 && preferredCustomer is null;
+        var hasOpenOwnershipInvestigation = await db.InvestigationItems.AsNoTracking()
+            .AnyAsync(i => i.ClientId == client.Id
+                           && i.Kind == InvestigationKind.DuplicateStripeCustomer
+                           && i.Status != InvestigationStatus.Resolved, ct);
+        var latestStripeRun = await db.SyncRuns.AsNoTracking()
+            .Where(r => r.System == ExternalSystem.Stripe
+                        && r.Status == SyncRunStatus.Completed
+                        && r.CompletedAt != null
+                        && r.StartedAt <= now
+                        && r.CompletedAt <= now)
+            .OrderByDescending(r => r.CompletedAt)
+            .FirstOrDefaultAsync(ct);
+        var stripeEvidenceIsFresh = latestStripeRun?.CompletedAt is { } completedAt
+                                    && now - completedAt <= EligibilityPolicy.StalenessBound;
+
+        // Scan the whole linked customer cluster. A preference chooses the target
+        // for a new subscription; it does not erase a subscription on another
+        // confirmed account.
+        var hasExistingNonTerminalSubscription = false;
+        var hasSubscriptionWithoutCustomerLink = false;
+        if (stripeEvidenceIsFresh && (activeCustomers.Count > 0 || activeSubscriptionIds.Count > 0))
+        {
+            var linkedSubscriptions = await db.StripeSubscriptions.AsNoTracking()
+                .Where(s => (activeCustomers.Contains(s.CustomerId)
+                             || activeSubscriptionIds.Contains(s.SubscriptionId))
+                            && s.SourceSyncedAt >= latestStripeRun!.StartedAt
+                            && s.SourceSyncedAt <= now)
+                .ToListAsync(ct);
+
+            hasSubscriptionWithoutCustomerLink = activeSubscriptionIds.Any(subscriptionId =>
+            {
+                var projection = linkedSubscriptions.FirstOrDefault(s => s.SubscriptionId == subscriptionId);
+                return projection is null
+                       || !activeCustomers.Contains(projection.CustomerId, StringComparer.Ordinal);
+            });
+            hasExistingNonTerminalSubscription = linkedSubscriptions.Any(subscription =>
+                !string.Equals(subscription.Status, "canceled", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(subscription.Status, "incomplete_expired", StringComparison.OrdinalIgnoreCase));
+        }
+
+        return new ConvertDraftInput(
+            accountType, client.CurrencyCode, packageId is not null, priceId,
+            preferredCustomer, ambiguousCustomers, hasOpenOwnershipInvestigation,
+            hasExistingNonTerminalSubscription, hasSubscriptionWithoutCustomerLink,
+            stripeEvidenceIsFresh);
+    }
+
+    internal static bool TryReadDraft(string? json, out ConvertDraft? draft)
+    {
+        draft = null;
+        if (string.IsNullOrWhiteSpace(json)) return false;
+        try
+        {
+            draft = JsonSerializer.Deserialize<ConvertDraft>(json);
+            return draft is not null;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 }

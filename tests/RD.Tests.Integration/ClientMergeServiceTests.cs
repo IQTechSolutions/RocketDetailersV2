@@ -3,9 +3,11 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RD.Domain;
 using RD.Domain.Entities;
+using RD.Infrastructure;
 using RD.Infrastructure.Enforcement;
 using RD.Infrastructure.Reconciliation;
 using RD.Tests.Integration.TestInfra;
+using RD.Web.Services;
 
 namespace RD.Tests.Integration;
 
@@ -53,6 +55,26 @@ public sealed class ClientMergeServiceTests : IDisposable
             Type = type, SignedAmount = signed, SourceSystem = ExternalSystem.Stripe, SourceObjectId = objId,
         });
         db.SaveChanges();
+    }
+
+    private Guid AddConvertIntent(
+        Guid clientId,
+        ConvertIntentState state,
+        DateTimeOffset? updatedAt = null,
+        string? customerId = null,
+        string? subscriptionId = null)
+    {
+        using var db = _db.CreateContext();
+        var intent = new ConvertIntent
+        {
+            Id = Guid.NewGuid(), ClientId = clientId, AccountType = AccountType.Own,
+            State = state, StripeCustomerId = customerId, StripeSubscriptionId = subscriptionId,
+            BillingStartedAt = state == ConvertIntentState.Drafted ? Now.AddMinutes(-10) : null,
+            CreatedAt = updatedAt ?? Now, UpdatedAt = updatedAt ?? Now,
+        };
+        db.ConvertIntents.Add(intent);
+        db.SaveChanges();
+        return intent.Id;
     }
 
     [Fact]
@@ -133,12 +155,80 @@ public sealed class ClientMergeServiceTests : IDisposable
         result.Message.Should().Contain("already merged");
     }
 
+    [Theory]
+    [InlineData(ConvertIntentState.Drafted, false)]
+    [InlineData(ConvertIntentState.AwaitingPayment, false)]
+    [InlineData(ConvertIntentState.Paid, false)]
+    [InlineData(ConvertIntentState.Expired, false)]
+    [InlineData(ConvertIntentState.Drafted, true)]
+    [InlineData(ConvertIntentState.AwaitingPayment, true)]
+    [InlineData(ConvertIntentState.Paid, true)]
+    [InlineData(ConvertIntentState.Expired, true)]
+    public async Task Merge_is_blocked_while_either_account_has_a_billing_relevant_conversion(
+        ConvertIntentState state,
+        bool intentBelongsToSurvivor)
+    {
+        var survivor = SeedClient("Ace Detailing");
+        var duplicate = SeedClient("Ace Detailing (dup)");
+        AddConvertIntent(intentBelongsToSurvivor ? survivor : duplicate, state);
+
+        var preview = await _service.PreviewAsync(survivor, duplicate);
+        var result = await _service.MergeAsync(survivor, duplicate, "operator");
+
+        preview.Blocked.Should().Contain("conversion");
+        result.Ok.Should().BeFalse();
+        result.Message.Should().Contain("conversion");
+        await using var verify = _db.CreateContext();
+        (await verify.Clients.FindAsync(duplicate))!.MergedIntoClientId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Racing_convert_commits_before_merge_preflight_and_merge_then_fails_closed()
+    {
+        var survivor = SeedClient("Ace Detailing");
+        var duplicate = SeedClient("Ace Detailing (dup)", c =>
+        {
+            c.ContractType = ContractType.Trial;
+            c.AccountType = AccountType.Own;
+        });
+        var fenceEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseConvert = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var convert = new ConvertService(
+            _db.Factory,
+            new TestClock(Now),
+            async (clientId, ct) =>
+            {
+                clientId.Should().Be(duplicate);
+                fenceEntered.TrySetResult();
+                await releaseConvert.Task.WaitAsync(ct);
+            });
+
+        var convertTask = convert.CreateIntentAsync(
+            duplicate, AccountType.Own, packageId: null, actor: "closer");
+        await fenceEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var mergeTask = _service.MergeAsync(survivor, duplicate, "operator");
+        await Task.Delay(100);
+        mergeTask.IsCompleted.Should().BeFalse("merge must wait on the conversion's client fence");
+
+        releaseConvert.TrySetResult();
+        var convertResult = await convertTask;
+        var mergeResult = await mergeTask;
+
+        convertResult.Ok.Should().BeTrue(convertResult.Message);
+        mergeResult.Ok.Should().BeFalse();
+        mergeResult.Message.Should().Contain("conversion");
+        await using var verify = _db.CreateContext();
+        (await verify.Clients.FindAsync(duplicate))!.MergedIntoClientId.Should().BeNull();
+        (await verify.ConvertIntents.CountAsync(i => i.ClientId == duplicate)).Should().Be(1);
+    }
+
     [Fact]
     public async Task Unmerge_restores_the_duplicate_moves_its_links_back_and_un_rolls_up_the_ledger()
     {
         var survivor = SeedClient("Ace Detailing", links: (ExternalSystem.Stripe, LinkKind.Customer, "cus_survivor"));
         var duplicate = SeedClient("Ace Detailing (dup)",
-            c => c.EnforcementMode = EnforcementMode.Auto, // a real prior mode to restore
+            c => c.EnforcementMode = EnforcementMode.Auto, // a real prior mode that must be re-approved after topology changes
             (ExternalSystem.Stripe, LinkKind.Customer, "cus_dup"));
         AddLedger(survivor, LedgerEntryType.ChargePaid, 1000m, "ch_survivor");
         AddLedger(duplicate, LedgerEntryType.ChargePaid, 500m, "ch_dup");
@@ -151,11 +241,12 @@ public sealed class ClientMergeServiceTests : IDisposable
 
         await using var ctx = _db.CreateContext();
 
-        // The duplicate is live again: pointer cleared, timestamp cleared, prior mode restored.
+        // The duplicate is live again, but remains fail-closed until its separate
+        // mapping is explicitly re-verified.
         var dup = await ctx.Clients.FindAsync(duplicate);
         dup!.MergedIntoClientId.Should().BeNull();
         dup.MergedAt.Should().BeNull();
-        dup.EnforcementMode.Should().Be(EnforcementMode.Auto);
+        dup.EnforcementMode.Should().Be(EnforcementMode.Shadow);
 
         // Its link resolves back to the duplicate.
         var dupLink = await ctx.IdentityLinks.SingleAsync(l => l.ExternalId == "cus_dup");
@@ -173,6 +264,56 @@ public sealed class ClientMergeServiceTests : IDisposable
         var audit = await ctx.ClientMergeAudits.SingleAsync(a => a.DuplicateId == duplicate);
         audit.ReversedAt.Should().Be(Now);
         audit.ReversedBy.Should().Be("operator");
+    }
+
+    [Fact]
+    public async Task Unmerge_is_blocked_after_a_merged_era_action_was_created()
+    {
+        var survivor = SeedClient(
+            "Merged survivor",
+            c => c.EnforcementMode = EnforcementMode.Auto,
+            (ExternalSystem.Meta, LinkKind.Campaign, "camp_survivor"));
+        var duplicate = SeedClient(
+            "Merged duplicate",
+            c => c.EnforcementMode = EnforcementMode.Assist,
+            (ExternalSystem.Meta, LinkKind.Campaign, "camp_duplicate"));
+        await AddCurrentVerificationAsync(survivor, "before-merge-survivor");
+        await AddCurrentVerificationAsync(duplicate, "before-merge-duplicate");
+
+        (await _service.MergeAsync(survivor, duplicate, "merge-operator")).Ok.Should().BeTrue();
+
+        Guid mergedEraActionId;
+        await using (var merged = _db.CreateContext())
+        {
+            await AddCurrentVerificationAsync(merged, survivor, "merged-era-review");
+            (await merged.Clients.FindAsync(survivor))!.EnforcementMode = EnforcementMode.Auto;
+            mergedEraActionId = Guid.NewGuid();
+            merged.OutboxActions.Add(new OutboxAction
+            {
+                Id = mergedEraActionId,
+                ClientId = survivor,
+                DecisionId = Guid.Empty,
+                ActionType = OutboxActionType.PauseCampaign,
+                PayloadJson = "{\"CampaignIds\":[\"camp_duplicate\"]}",
+                IdempotencyKey = $"merged-era:{mergedEraActionId:N}",
+                Status = OutboxStatus.Approved,
+                ExpectedKillSwitchEpoch = 0,
+                CreatedAt = Now,
+            });
+            await merged.SaveChangesAsync();
+        }
+
+        var result = await _service.UnmergeAsync(duplicate, "unmerge-operator");
+
+        result.Ok.Should().BeFalse();
+        result.Message.Should().Contain("post-merge");
+        await using var verify = _db.CreateContext();
+        (await verify.Clients.FindAsync(survivor))!.EnforcementMode.Should().Be(EnforcementMode.Auto);
+        (await verify.Clients.FindAsync(duplicate))!.EnforcementMode.Should().Be(EnforcementMode.Shadow);
+        (await verify.OutboxActions.FindAsync(mergedEraActionId))!.Status
+            .Should().Be(OutboxStatus.Approved);
+        (await verify.IdentityLinks.SingleAsync(l => l.ExternalId == "camp_duplicate")).ClientId
+            .Should().Be(survivor);
     }
 
     [Fact]
@@ -235,5 +376,91 @@ public sealed class ClientMergeServiceTests : IDisposable
         result.Message.Should().Contain("manually");
     }
 
+    [Fact]
+    public async Task Unmerge_is_blocked_while_either_side_has_a_recoverable_conversion()
+    {
+        var survivor = SeedClient("Ace Detailing");
+        var duplicate = SeedClient("Ace Detailing (dup)");
+        (await _service.MergeAsync(survivor, duplicate, "operator")).Ok.Should().BeTrue();
+        AddConvertIntent(survivor, ConvertIntentState.Expired, updatedAt: Now);
+
+        var preview = await _service.UnmergePreviewAsync(duplicate);
+        var result = await _service.UnmergeAsync(duplicate, "operator");
+
+        preview.Blocked.Should().Contain("conversion");
+        result.Ok.Should().BeFalse();
+        result.Message.Should().Contain("conversion");
+        await using var verify = _db.CreateContext();
+        (await verify.Clients.FindAsync(duplicate))!.MergedIntoClientId.Should().Be(survivor);
+        (await verify.ClientMergeAudits.SingleAsync()).ReversedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Unmerge_is_blocked_after_a_closed_merged_era_conversion_created_a_subscription()
+    {
+        var survivor = SeedClient("Ace Detailing",
+            links: (ExternalSystem.Stripe, LinkKind.Customer, "cus_survivor"));
+        var duplicate = SeedClient("Ace Detailing (dup)",
+            links: (ExternalSystem.Stripe, LinkKind.Customer, "cus_duplicate"));
+        (await _service.MergeAsync(survivor, duplicate, "operator")).Ok.Should().BeTrue();
+
+        var activityAt = Now.AddMinutes(1);
+        var intentId = AddConvertIntent(
+            survivor, ConvertIntentState.Closed, activityAt, "cus_duplicate", "sub_post_merge");
+        using (var db = _db.CreateContext())
+        {
+            db.IdentityLinks.Add(new IdentityLink
+            {
+                Id = Guid.NewGuid(), ClientId = survivor, System = ExternalSystem.Stripe,
+                Kind = LinkKind.Subscription, ExternalId = "sub_post_merge",
+                CreatedAt = activityAt, VerifiedAt = activityAt,
+            });
+            db.StripeSubscriptions.Add(new StripeSubscriptionProj
+            {
+                SubscriptionId = "sub_post_merge", ClientId = survivor,
+                CustomerId = "cus_duplicate", Status = "active", SourceSyncedAt = activityAt,
+            });
+            db.SaveChanges();
+        }
+
+        var preview = await _service.UnmergePreviewAsync(duplicate);
+        var result = await _service.UnmergeAsync(duplicate, "operator");
+
+        preview.Blocked.Should().Contain("post-merge");
+        result.Ok.Should().BeFalse();
+        result.Message.Should().Contain("post-merge");
+        await using var verify = _db.CreateContext();
+        (await verify.Clients.FindAsync(duplicate))!.MergedIntoClientId.Should().Be(survivor);
+        (await verify.IdentityLinks.SingleAsync(l => l.ExternalId == "cus_duplicate")).ClientId
+            .Should().Be(survivor);
+        (await verify.IdentityLinks.SingleAsync(l => l.ExternalId == "sub_post_merge")).ClientId
+            .Should().Be(survivor);
+        (await verify.ConvertIntents.FindAsync(intentId))!.ClientId.Should().Be(survivor);
+    }
+
     public void Dispose() => _db.Dispose();
+
+    private async Task AddCurrentVerificationAsync(Guid clientId, string actor)
+    {
+        await using var db = _db.CreateContext();
+        await AddCurrentVerificationAsync(db, clientId, actor);
+        await db.SaveChangesAsync();
+    }
+
+    private static async Task AddCurrentVerificationAsync(RdDbContext db, Guid clientId, string actor)
+    {
+        var pins = await db.IdentityLinks
+            .Where(link => link.ClientId == clientId && link.InvalidatedAt == null)
+            .Select(link => new { linkId = link.Id, linkVersion = link.LinkVersion })
+            .ToListAsync();
+        db.MappingVerifications.Add(new MappingVerification
+        {
+            Id = Guid.NewGuid(),
+            ClientId = clientId,
+            VerifiedLinksJson = System.Text.Json.JsonSerializer.Serialize(pins),
+            VerifiedBy = actor,
+            BlastRadiusAcknowledged = true,
+            VerifiedAt = Now,
+        });
+    }
 }

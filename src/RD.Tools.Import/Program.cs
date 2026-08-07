@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using RD.Domain;
 using RD.Domain.Entities;
 using RD.Infrastructure;
+using RD.Infrastructure.Enforcement;
 using RD.Tools.Import;
 
 // "sync" verb: one-shot vendor sync + policy evaluation (see SyncRunner).
@@ -75,7 +76,7 @@ if (args.Length > 0 && args[0].Equals("scorecard", StringComparison.OrdinalIgnor
 
 // Seed importer: one-time load of the reconciliation spreadsheet into SQL.
 // Disposable by design (design doc: "one-time spreadsheet import code").
-// Usage: dotnet run --project src/RD.Tools.Import -- "<xlsx path>" [--conn "<connection string>"] [--force]
+// Usage: dotnet run --project src/RD.Tools.Import -- "<xlsx path>" [--conn "<connection string>"] [--force] [--activate-secondary-stripe-links]
 
 var xlsxPath = args.FirstOrDefault(a => !a.StartsWith("--"))
     ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "All Clients - completed Final.xlsx");
@@ -84,6 +85,9 @@ var conn = connIdx >= 0 && connIdx + 1 < args.Length
     ? args[connIdx + 1]
     : "Server=(localdb)\\MSSQLLocalDB;Database=RocketDetailers;Trusted_Connection=True;MultipleActiveResultSets=true;TrustServerCertificate=True";
 var force = args.Contains("--force");
+var activateSecondaryStripeLinks = args.Contains(
+    "--activate-secondary-stripe-links",
+    StringComparer.OrdinalIgnoreCase);
 
 var options = new DbContextOptionsBuilder<RdDbContext>()
     .UseSqlServer(conn)
@@ -114,6 +118,8 @@ var clients = 0; var links = 0; var investigations = 0; var trials = 0; var skip
 var seenLinks = new HashSet<(ExternalSystem, LinkKind, string)>();
 
 var lastRow = ws.LastRowUsed()!.RowNumber();
+await using var ownershipFence =
+    await ClientMutationFence.AcquireMappingOwnershipAsync(db);
 await using var tx = await db.Database.BeginTransactionAsync();
 
 for (var r = 5; r <= lastRow; r++)
@@ -189,15 +195,26 @@ for (var r = 5; r <= lastRow; r++)
     AddLink(ExternalSystem.Meta, LinkKind.Campaign, Cell(row, "Meta Campaign ID"));
     AddLink(ExternalSystem.Meta, LinkKind.AdAccount, Cell(row, "Ad account ID"));
 
-    // The duplicate-Stripe-customer rows: second customer/sub go to the work queue, never a second active link.
+    // A second Stripe identity needs a human to confirm that it belongs to the
+    // same business (then link/monitor it); separate-business cases stay open
+    // for manual mapping correction outside this workflow.
     var cus2 = Cell(row, "Stripe Customer ID 2 (cus_...)");
     var sub2 = Cell(row, "Stripe Subscription ID 2 (sub_...)");
+    // Phase-one deployments deliberately leave secondary identities hidden so
+    // the previous arbitrary-first billing code remains a safe rollback target.
+    // Activate only after the preference-aware binary is the established
+    // baseline (the phase-two startup repair uses the same staged boundary).
+    if (activateSecondaryStripeLinks)
+    {
+        AddLink(ExternalSystem.Stripe, LinkKind.Customer, cus2);
+        AddLink(ExternalSystem.Stripe, LinkKind.Subscription, sub2);
+    }
     if (!string.IsNullOrWhiteSpace(cus2) || !string.IsNullOrWhiteSpace(sub2))
     {
         db.InvestigationItems.Add(new InvestigationItem
         {
             Id = Guid.NewGuid(), ClientId = client.Id, Kind = InvestigationKind.DuplicateStripeCustomer,
-            Detail = $"Second Stripe identity in spreadsheet: customer='{cus2}', subscription='{sub2}'. Merge or invalidate.",
+            Detail = $"Second Stripe identity in spreadsheet: customer='{cus2}', subscription='{sub2}'. Confirm the same business here; otherwise leave open for manual mapping correction.",
             System = ExternalSystem.Stripe, ExternalId = string.IsNullOrWhiteSpace(cus2) ? null : cus2,
             CreatedAt = now,
         });

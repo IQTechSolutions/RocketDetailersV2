@@ -2,18 +2,20 @@
 @attribute [Authorize]
 @using RD.Domain
 @using RD.Web.Components.Dialogs
+@using Microsoft.AspNetCore.Components.Authorization
 @inject ReconciliationService Recon
 @inject MappingWizardService Wizard
 @inject VendorLinks Vendor
 @inject IDialogService Dialogs
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
 
 <PageTitle>Reconciliation — Rocket Detailer Control Plane</PageTitle>
 
 <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
     <MudText Typo="Typo.h5">Reconciliation</MudText>
-    <HelpHint Text="The work queue: everything the import or the engine couldn't resolve on its own. Fixing these unlocks enforcement client by client. Resolving here is the only thing in the app that writes to the database today." />
+    <HelpHint Text="The work queue: everything the import or the engine couldn't resolve on its own. Review each identity issue carefully; confirmed fixes are recorded in the audit trail." />
 </MudStack>
 
 <MudPaper Elevation="1" Class="pa-4">
@@ -35,6 +37,20 @@
         </MudToggleGroup>
 
         <MudSpacer />
+        @if (_statusView == "Open"
+             && (_kind is null or InvestigationKind.DuplicateStripeCustomer))
+        {
+            <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="stripeBulkAuth">
+                <MudTooltip Arrow="true" Text="Set only fresh active/trialing-account preferences. Same-business ownership still needs confirmation; separate-business cases stay open for manual mapping correction.">
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.AutoFixHigh"
+                               Disabled="@(_applyingStripeRecommendations || _rows is null || !_rows.Any(r => r.Kind == InvestigationKind.DuplicateStripeCustomer))"
+                               OnClick="ApplySafeStripeRecommendationsAsync">
+                        @(_applyingStripeRecommendations ? "Setting safe preferences…" : "Set safe Stripe preferences")
+                    </MudButton>
+                </MudTooltip>
+            </AuthorizeView>
+        }
         @if (_rows is not null)
         {
             <MudText Typo="Typo.caption" Class="mud-text-secondary">@_rows.Count @(_rows.Count == 1 ? "item" : "items")</MudText>
@@ -66,7 +82,9 @@
                                 @(context.Item.ClientName ?? "View client")
                             </MudLink>
                             @* Mapping gaps and import conflicts are fixed in the mapping wizard — deep-link straight to this client. *@
-                            @if (context.Item.Kind is InvestigationKind.UnmappedIdentity or InvestigationKind.ImportConflict)
+                            @if (context.Item.Kind is InvestigationKind.UnmappedIdentity
+                                or InvestigationKind.ImportConflict
+                                or InvestigationKind.DuplicateStripeCustomer)
                             {
                                 <MudLink Href="@($"/mapping?clientId={context.Item.ClientId}")" Typo="Typo.caption" Class="d-block">
                                     → Fix mapping
@@ -106,26 +124,36 @@
                 {
                     <TemplateColumn Title="" Sortable="false">
                         <CellTemplate>
-                            <MudStack Row="true" Spacing="1">
-                                @if (context.Item.Kind == InvestigationKind.DuplicateStripeCustomer)
-                                {
-                                    <MudTooltip Arrow="true" Text="Pick which Stripe customer to keep; the duplicates are invalidated.">
-                                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
-                                                   OnClick="@(() => HandleDuplicateStripeAsync(context.Item))">Resolve…</MudButton>
-                                    </MudTooltip>
-                                }
-                                else
-                                {
-                                    <MudTooltip Arrow="true" Text="Mark fixed, with a note for the audit trail.">
-                                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
-                                                   OnClick="@(() => HandleAsync(context.Item, dismiss: false))">Resolve</MudButton>
-                                    </MudTooltip>
-                                }
-                                <MudTooltip Arrow="true" Text="Not a real problem — close it with a note saying why.">
-                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
-                                               OnClick="@(() => HandleAsync(context.Item, dismiss: true))">Dismiss</MudButton>
-                                </MudTooltip>
-                            </MudStack>
+                            <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="reconciliationWriteAuth">
+                                <Authorized>
+                                    <MudStack Row="true" Spacing="1">
+                                        @if (context.Item.Kind == InvestigationKind.DuplicateStripeCustomer)
+                                        {
+                                            <MudTooltip Arrow="true" Text="Confirm the accounts belong to this business and choose which customer new subscriptions should use. All linked accounts stay monitored.">
+                                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                                           OnClick="@(() => HandleDuplicateStripeAsync(context.Item))">Review &amp; confirm…</MudButton>
+                                            </MudTooltip>
+                                        }
+                                        else
+                                        {
+                                            <MudTooltip Arrow="true" Text="Mark fixed, with a note for the audit trail.">
+                                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                                           OnClick="@(() => HandleAsync(context.Item, dismiss: false))">Resolve</MudButton>
+                                            </MudTooltip>
+                                        }
+                                        @if (context.Item.Kind != InvestigationKind.DuplicateStripeCustomer)
+                                        {
+                                            <MudTooltip Arrow="true" Text="Not a real problem — close it with a note saying why.">
+                                                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                                                           OnClick="@(() => HandleAsync(context.Item, dismiss: true))">Dismiss</MudButton>
+                                            </MudTooltip>
+                                        }
+                                    </MudStack>
+                                </Authorized>
+                                <NotAuthorized>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">Read only</MudText>
+                                </NotAuthorized>
+                            </AuthorizeView>
                         </CellTemplate>
                     </TemplateColumn>
                 }
@@ -177,6 +205,7 @@
     private InvestigationKind? _kind;
     private string _statusView = "Open";
     private string? _loadedFor;
+    private bool _applyingStripeRecommendations;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -209,35 +238,79 @@
     {
         if (item.ClientId is not Guid clientId)
         {
-            await HandleAsync(item, dismiss: false);
+            Snackbar.Add("This Stripe ownership item is not attached to a client and cannot be confirmed. Correct its mapping first.", Severity.Warning);
             return;
         }
 
-        var candidates = await Wizard.GetStripeCustomerCandidates(clientId);
-        if (candidates.Count < 2)
+        var choice = await Wizard.GetStripeCustomerChoice(clientId);
+        if (choice.Candidates.Count < 2)
         {
-            // The duplicate ids live only in the item detail (nothing linked to invalidate) — close it with a note.
-            Snackbar.Add("Only one active Stripe customer is linked here — resolve it with a note instead.", Severity.Info);
-            await HandleAsync(item, dismiss: false);
+            Snackbar.Add(
+                "This item cannot be closed because fewer than two active Stripe customer links are available. Add or correct the missing mapping first.",
+                Severity.Warning);
+            Nav.NavigateTo($"/mapping?clientId={clientId}");
             return;
         }
 
         var parameters = new DialogParameters<ResolveDuplicateStripeDialog>
         {
             { d => d.ClientName, item.ClientName },
-            { d => d.Candidates, candidates },
+            { d => d.Choice, choice },
+            { d => d.ConfirmSameBusiness, true },
         };
         var dialog = await Dialogs.ShowAsync<ResolveDuplicateStripeDialog>(null, parameters);
         var result = await dialog.Result;
-        if (result is null || result.Canceled || result.Data is not string keep) return;
+        if (result is null || result.Canceled || result.Data is not string preferred) return;
 
-        var write = await Wizard.ResolveDuplicateStripe(item.Id, keep);
+        var actor = await GetOperatorActorAsync();
+        if (actor is null) return;
+        var write = await Wizard.ResolveDuplicateStripe(
+            item.Id, preferred, choice.CustomerLinks, actor);
         Snackbar.Add(write.Message, write.Ok ? Severity.Success : Severity.Warning);
         await LoadAsync();
     }
 
+    private async Task ApplySafeStripeRecommendationsAsync()
+    {
+        var actor = await GetOperatorActorAsync();
+        if (actor is null) return;
+        var confirmed = await Dialogs.ShowMessageBoxAsync(
+            "Set safe Stripe preferences?",
+            "This checks every open multiple-customer record, including records hidden by the current search or grid page. " +
+            "It sets only fresh active/trialing-account preferences; existing valid preferences remain unchanged. " +
+            "It does not confirm business ownership or close any investigation. All linked accounts remain monitored.",
+            yesText: "Set safe preferences", cancelText: "Cancel");
+        if (confirmed != true) return;
+
+        _applyingStripeRecommendations = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Wizard.ApplySafeStripeCustomerPreferences(actor);
+            Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
+            await LoadAsync();
+        }
+        finally
+        {
+            _applyingStripeRecommendations = false;
+        }
+    }
+
+    private async Task<string?> GetOperatorActorAsync()
+    {
+        var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+        if (!Roles.OperatorRoles.Any(user.IsInRole))
+        {
+            Snackbar.Add("This action requires the Operator role.", Severity.Warning);
+            return null;
+        }
+        return user.Identity?.Name ?? "operator";
+    }
+
     private async Task HandleAsync(InvestigationRow item, bool dismiss)
     {
+        if (await GetOperatorActorAsync() is null) return;
+
         var parameters = new DialogParameters<ResolveInvestigationDialog>
         {
             { d => d.Item, item },

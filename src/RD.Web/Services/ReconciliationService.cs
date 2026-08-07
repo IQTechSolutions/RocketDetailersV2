@@ -19,8 +19,8 @@ public sealed record InvestigationRow(
     string? ExternalId);
 
 /// <summary>
-/// The reconciliation work queue. This is the ONLY service in the UI that
-/// writes to the database (resolve/dismiss of InvestigationItems).
+/// Generic reconciliation queue reads and resolve/dismiss writes. Structured
+/// ownership and mapping fixes use MappingWizardService instead.
 /// </summary>
 public class ReconciliationService(IDbContextFactory<RdDbContext> factory, IClock clock)
 {
@@ -44,12 +44,18 @@ public class ReconciliationService(IDbContextFactory<RdDbContext> factory, ICloc
             .ToListAsync(ct);
     }
 
-    /// <summary>Marks an item Resolved (or Dismissed) with a note. Returns false if it was already handled by someone else.</summary>
+    /// <summary>
+    /// Marks a generic item Resolved (or Dismissed) with a note. Stripe customer
+    /// ownership items must use MappingWizardService so they cannot be closed
+    /// without confirming the complete active customer set.
+    /// </summary>
     public async Task<bool> ResolveAsync(Guid id, string note, bool dismiss, CancellationToken ct = default)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         var item = await db.InvestigationItems.FirstOrDefaultAsync(i => i.Id == id, ct);
         if (item is null || item.Status != InvestigationStatus.Open)
+            return false;
+        if (item.Kind == InvestigationKind.DuplicateStripeCustomer)
             return false;
 
         item.Status = dismiss ? InvestigationStatus.Dismissed : InvestigationStatus.Resolved;

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RD.Domain;
 using RD.Domain.Entities;
+using RD.Infrastructure.Enforcement;
 using RD.Infrastructure.Gateways;
 
 namespace RD.Infrastructure.Sync;
@@ -52,12 +53,6 @@ public sealed class GhlMessageSyncJob(
         var o = options.Value;
         var now = clock.UtcNow;
 
-        var contactToClient = (await db.IdentityLinks
-                .Where(l => l.System == ExternalSystem.Ghl && l.Kind == LinkKind.Contact && l.InvalidatedAt == null)
-                .Select(l => new { l.ExternalId, l.ClientId })
-                .ToListAsync(ct))
-            .ToDictionary(l => l.ExternalId, l => l.ClientId);
-
         // Gather outbound messages across all configured locations first…
         var swept = new List<(string LocationId, string ContactId, GhlMessageDto Message)>();
         foreach (var location in o.Locations)
@@ -83,6 +78,15 @@ public sealed class GhlMessageSyncJob(
         }
 
         // …then upsert in one pass against the existing rows for those ids.
+        await using var ownershipFence =
+            await ClientMutationFence.AcquireMappingOwnershipAsync(db, ct);
+
+        var contactToClient = (await db.IdentityLinks
+                .Where(l => l.System == ExternalSystem.Ghl && l.Kind == LinkKind.Contact && l.InvalidatedAt == null)
+                .Select(l => new { l.ExternalId, l.ClientId })
+                .ToListAsync(ct))
+            .ToDictionary(l => l.ExternalId, l => l.ClientId);
+
         var messageIds = swept.Select(s => s.Message.Id).Distinct().ToList();
         var projections = await db.GhlMessages
             .Where(m => messageIds.Contains(m.MessageId))

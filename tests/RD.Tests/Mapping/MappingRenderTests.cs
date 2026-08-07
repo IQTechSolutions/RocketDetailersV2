@@ -66,4 +66,30 @@ public class MappingRenderTests : BunitContext, IAsyncLifetime
         // The required-acknowledgement gate is present, disabled until links + box.
         cut.Markup.Should().Contain("I've verified these links control the right client's ads");
     }
+
+    [Fact]
+    public void DetailPanel_shows_every_active_link_before_the_operator_verifies()
+    {
+        var first = new LinkView(
+            Guid.NewGuid(), ExternalSystem.Stripe, LinkKind.Customer, "cus_first", 1,
+            Verified: true, Invalidated: false, DateTimeOffset.UtcNow,
+            "active subscription", ExternalUrl: null);
+        var second = new LinkView(
+            Guid.NewGuid(), ExternalSystem.Stripe, LinkKind.Customer, "cus_second", 2,
+            Verified: false, Invalidated: false, VerifiedAt: null,
+            "recent paid invoice", ExternalUrl: null);
+        var slots = RequiredLinks.All.Select(s =>
+            s.System == ExternalSystem.Stripe && s.Kind == LinkKind.Customer
+                ? new RequiredSlot(s.System, s.Kind, s.Label, s.HelpText, first, [second])
+                : new RequiredSlot(s.System, s.Kind, s.Label, s.HelpText, Active: null))
+            .ToList();
+        var detail = new ClientMappingDetail(
+            Guid.NewGuid(), "Two-account business", EnforcementMode.Shadow, AccountType.Master, "USD",
+            slots, [first, second], [], new BlastRadiusSummary(0, 0m, "USD"),
+            HasCurrentVerification: false, LastVerifiedAt: null, LastVerifiedBy: null);
+
+        var cut = Render<MappingDetailPanel>(p => p.Add(x => x.Detail, detail));
+
+        cut.Markup.Should().Contain("cus_first").And.Contain("cus_second").And.Contain("2 linked");
+    }
 }

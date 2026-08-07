@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using RD.Domain;
 using RD.Domain.Entities;
 using RD.Infrastructure;
+using RD.Infrastructure.Enforcement;
 using RD.Infrastructure.Gateways;
 
 namespace RD.Web.Services;
@@ -39,10 +40,16 @@ public class GhlContactAdminService(
             return new GhlContactWriteResult(false, "That GHL location isn't configured (no token).");
 
         await using var db = await factory.CreateDbContextAsync(ct);
+        await using var mutationFence = await ClientMutationFence.AcquireAsync(db, clientId, ct);
+        await using var ownershipFence = await ClientMutationFence.AcquireMappingOwnershipAsync(db, ct);
         var now = clock.UtcNow;
 
         var client = await db.Clients.FirstOrDefaultAsync(c => c.Id == clientId, ct);
         if (client is null) return new GhlContactWriteResult(false, "Client not found.");
+        if (client.MergedIntoClientId is not null)
+            return new GhlContactWriteResult(
+                false,
+                "This client was merged into another account — create or link the contact on the surviving client instead.");
 
         var already = await db.IdentityLinks.AnyAsync(l =>
             l.ClientId == clientId && l.System == ExternalSystem.Ghl && l.Kind == LinkKind.Contact && l.InvalidatedAt == null, ct);
