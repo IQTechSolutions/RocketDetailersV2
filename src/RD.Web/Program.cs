@@ -175,12 +175,7 @@ app.MapHangfireDashboard("/hangfire", new DashboardOptions { Authorization = [ne
 // observability). The policy heartbeat always runs: shadow evaluation off
 // whatever projections exist is exactly what the shadow phase is for.
 var recurring = app.Services.GetRequiredService<IRecurringJobManager>();
-if (!string.IsNullOrEmpty(builder.Configuration["Stripe:ApiKey"]))
-    recurring.AddOrUpdate<StripeSyncJob>("stripe-sync", j => j.RunAsync(CancellationToken.None), "*/15 * * * *");
-if (!string.IsNullOrEmpty(builder.Configuration["Meta:AccessToken"]))
-    recurring.AddOrUpdate<MetaSyncJob>("meta-sync", j => j.RunAsync(CancellationToken.None), "0 * * * *");
-if (!string.IsNullOrEmpty(builder.Configuration["Ghl:Locations:0:Token"]))
-    recurring.AddOrUpdate<GhlMessageSyncJob>("ghl-message-sync", j => j.RunAsync(CancellationToken.None), "*/15 * * * *");
+VendorRecurringJobs.Reconcile(recurring, builder.Configuration);
 recurring.AddOrUpdate<PolicyEvaluationJob>("policy-evaluation", j => j.RunAsync(CancellationToken.None), "*/5 * * * *");
 // Reap conversions billed but never paid (AwaitingPayment past ExpiresAt → Expired). Hourly is ample
 // for a multi-day payment window; a late payment after expiry is recovered by the webhook.
@@ -194,8 +189,6 @@ recurring.AddOrUpdate<ConvertCloseWriteJob>("convert-close-write", j => j.RunAsy
 // dispatch) and doubly guarded by the safety profile (TestMode + canary-only).
 recurring.AddOrUpdate<OutboxDispatcher>("outbox-dispatch", d => d.RunAsync(CancellationToken.None), "* * * * *");
 recurring.AddOrUpdate<GhlDeliveryVerificationJob>("ghl-delivery-verify", j => j.RunAsync(CancellationToken.None), "*/5 * * * *");
-if (!string.IsNullOrEmpty(builder.Configuration["Slack:IncomingWebhookUrl"]))
-    recurring.AddOrUpdate<SlackNotificationJob>("slack-notify", j => j.RunAsync(CancellationToken.None), "* * * * *");
 
 // Ensure roles + the seed user exist so the app is usable on first run,
 // then link the mapped Slack users onto their internal accounts.

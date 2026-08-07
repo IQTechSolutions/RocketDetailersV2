@@ -71,7 +71,7 @@ public sealed record GhlMessageDto(
 
 /// <summary>
 /// Raw-HttpClient GoHighLevel reads. Auth is a PER-LOCATION Private Integration
-/// Token (exactly 2 locations in production), resolved per request from
+/// Token (one per configured production location), resolved per request from
 /// configuration — tokens never leave the Authorization header and error
 /// messages carry only the location id.
 /// </summary>
