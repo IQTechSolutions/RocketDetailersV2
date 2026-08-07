@@ -1,3 +1,4 @@
+using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -22,6 +23,10 @@ public sealed class StripeSyncJob(
     ILogger<StripeSyncJob> logger)
 {
 
+    // Manual and recurring sweeps share this SQL-backed Hangfire lock. Without
+    // it, overlapping upserts can both observe a missing projection and race to
+    // insert the same primary key.
+    [DisableConcurrentExecution("rd:stripe-sync", 30 * 60)]
     public async Task RunAsync(CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);

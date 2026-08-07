@@ -1,3 +1,4 @@
+using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -21,6 +22,7 @@ public sealed class MetaSyncJob(
     IClock clock,
     ILogger<MetaSyncJob> logger)
 {
+    [DisableConcurrentExecution("rd:meta-sync", 30 * 60)]
     public async Task RunAsync(CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);

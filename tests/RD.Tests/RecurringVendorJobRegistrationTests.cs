@@ -1,13 +1,37 @@
+using System.Reflection;
 using FluentAssertions;
 using Hangfire;
 using Hangfire.Common;
 using Microsoft.Extensions.Configuration;
+using RD.Infrastructure.Sync;
 using RD.Web.Services;
 
 namespace RD.Tests;
 
 public sealed class RecurringVendorJobRegistrationTests
 {
+    public static TheoryData<Type, string> ConcurrencyGuardedJobs => new()
+    {
+        { typeof(StripeSyncJob), "rd:stripe-sync" },
+        { typeof(MetaSyncJob), "rd:meta-sync" },
+        { typeof(GhlMessageSyncJob), "rd:ghl-message-sync" }
+    };
+
+    [Theory]
+    [MemberData(nameof(ConcurrencyGuardedJobs))]
+    public void VendorSyncJob_UsesDistributedLock_ForManualAndRecurringRuns(
+        Type jobType,
+        string expectedResource)
+    {
+        var runMethod = jobType.GetMethod("RunAsync");
+
+        var guard = runMethod!.GetCustomAttribute<DisableConcurrentExecutionAttribute>();
+
+        guard.Should().NotBeNull();
+        guard!.Resource.Should().Be(expectedResource);
+        guard.TimeoutSec.Should().Be(30 * 60);
+    }
+
     [Fact]
     public void Reconcile_RemovesPersistedVendorJobs_WhenCredentialsAreMissing()
     {

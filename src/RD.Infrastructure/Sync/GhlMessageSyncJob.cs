@@ -1,3 +1,4 @@
+using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -24,6 +25,7 @@ public sealed class GhlMessageSyncJob(
     private const int BodyPreviewMaxLength = 500;
     private const int MessageTypeMaxLength = 30; // column width on GhlMessageProj
 
+    [DisableConcurrentExecution("rd:ghl-message-sync", 30 * 60)]
     public async Task RunAsync(CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
