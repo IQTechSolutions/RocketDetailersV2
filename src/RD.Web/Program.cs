@@ -139,6 +139,19 @@ using (var migrationScope = app.Services.CreateScope())
     app.Logger.LogInformation(
         "Legacy Stripe investigation cleanup dismissed {AffectedCount} misclassified item(s).",
         dismissedCount);
+
+    var legacyStripeLinkRepair = migrationScope.ServiceProvider
+        .GetRequiredService<LegacySpreadsheetStripeLinkRepair>();
+    var repair = await legacyStripeLinkRepair.RunAsync();
+    app.Logger.LogInformation(
+        "Legacy spreadsheet Stripe link repair matched {MatchedInvestigations} item(s), added {LinksAdded} link(s) across {ClientsChanged} client(s), skipped {ConflictInvestigations} conflicted item(s), invalidated {VerificationsInvalidated} verification(s), demoted {ClientsDemoted} client(s), and superseded {OutboxActionsSuperseded} queued action(s).",
+        repair.MatchedInvestigations,
+        repair.LinksAdded,
+        repair.ClientsChanged,
+        repair.ConflictInvestigationsSkipped,
+        repair.VerificationsInvalidated,
+        repair.ClientsDemoted,
+        repair.OutboxActionsSuperseded);
 }
 
 // Configure the HTTP request pipeline.
