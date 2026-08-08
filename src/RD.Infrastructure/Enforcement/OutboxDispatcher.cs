@@ -33,7 +33,8 @@ public sealed class OutboxDispatcher(
     IGhlGateway ghl,
     IClock clock,
     IOptions<EnforcementOptions> enforcement,
-    ILogger<OutboxDispatcher> logger)
+    ILogger<OutboxDispatcher> logger,
+    Func<Guid, CancellationToken, Task>? beforeClientFence = null)
 {
     private readonly EnforcementOptions _enf = enforcement.Value;
 
@@ -54,7 +55,6 @@ public sealed class OutboxDispatcher(
         if (claimedIds.Count == 0) return;
 
         var actions = await db.OutboxActions.Where(a => claimedIds.Contains(a.Id)).ToListAsync(ct);
-        var ctx = await stateBuilder.LoadContextAsync(db, ct);
 
         var executed = 0; var superseded = 0; var failed = 0; var deadLettered = 0;
 
@@ -63,6 +63,22 @@ public sealed class OutboxDispatcher(
             ct.ThrowIfCancellationRequested();
             try
             {
+                // Serialize the final revalidation + vendor I/O with mapping and
+                // subscription changes for this client. A mapper may have
+                // superseded a claimed lease while waiting for this fence, so
+                // reload and prove this dispatcher still owns it before acting.
+                if (beforeClientFence is not null)
+                    await beforeClientFence(action.ClientId, ct);
+                await using var mutationFence = await ClientMutationFence.AcquireAsync(db, action.ClientId, ct);
+                await db.Entry(action).ReloadAsync(ct);
+                if (action.Status != OutboxStatus.Leased
+                    || !string.Equals(action.LeaseOwner, owner, StringComparison.Ordinal))
+                    continue;
+
+                // Reload vendor freshness only after the client fence is held.
+                // BuildAsync independently reads merge membership inside this
+                // protected window before rolling up append-only ledger rows.
+                var ctx = await stateBuilder.LoadContextAsync(db, ct);
                 var outcome = await ProcessAsync(db, action, ctx, now, ct);
                 switch (outcome)
                 {
@@ -115,6 +131,12 @@ public sealed class OutboxDispatcher(
         var client = await db.Clients.AsNoTracking().FirstOrDefaultAsync(c => c.Id == action.ClientId, ct);
         if (client is null)
             return await SupersedeAsync(db, action, "Client no longer exists.", ct);
+        if (client.EnforcementMode == EnforcementMode.Shadow)
+            return await SupersedeAsync(
+                db,
+                action,
+                "Client was demoted to Shadow after this action was staged; Shadow mode never performs vendor writes.",
+                ct);
 
         var state = await stateBuilder.BuildAsync(db, client, ctx, ct);
         var verdict = EligibilityPolicy.Evaluate(state);

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RD.Domain;
 using RD.Domain.Entities;
+using RD.Infrastructure.Enforcement;
 using RD.Infrastructure.Gateways;
 
 namespace RD.Infrastructure.Sync;
@@ -55,6 +56,21 @@ public sealed class StripeSyncJob(
         // Configurable so a one-off backfill can pull full history.
         var window = TimeSpan.FromDays(Math.Max(1, options.Value.LedgerLookbackDays));
 
+        // Finish every slow vendor read before taking the ownership barrier.
+        // Attribution is then re-resolved under the barrier and committed before
+        // any mapping writer can move an external id to another client.
+        var subscriptions = await stripe.ListSubscriptionsAsync(ct);
+        var openInvoices = await stripe.ListInvoicesAsync("open", null, ct);
+        var recentInvoices = await stripe.ListInvoicesAsync(null, now - window, ct);
+        var invoices = openInvoices.Concat(recentInvoices)
+            .GroupBy(i => i.Id)
+            .Select(g => g.First())
+            .ToList();
+        var charges = await stripe.ListChargesAsync(now - window, ct);
+
+        await using var ownershipFence =
+            await ClientMutationFence.AcquireMappingOwnershipAsync(db, ct);
+
         // Active identity links resolve vendor ids → ClientId. Invalidated links
         // never resolve (drift demotes; a stale mapping must not route money).
         var links = await db.IdentityLinks
@@ -75,7 +91,6 @@ public sealed class StripeSyncJob(
         }
 
         // --- Subscriptions: complete paginated sweep, then upsert.
-        var subscriptions = await stripe.ListSubscriptionsAsync(ct);
         var subProjections = await db.StripeSubscriptions.ToDictionaryAsync(p => p.SubscriptionId, ct);
         foreach (var sub in subscriptions)
         {
@@ -97,13 +112,6 @@ public sealed class StripeSyncJob(
 
         // --- Invoices: ALL open ones (age-independent — they gate eligibility)
         // plus a recent window (catches paid / uncollectible transitions).
-        var openInvoices = await stripe.ListInvoicesAsync("open", null, ct);
-        var recentInvoices = await stripe.ListInvoicesAsync(null, now - window, ct);
-        var invoices = openInvoices.Concat(recentInvoices)
-            .GroupBy(i => i.Id)
-            .Select(g => g.First())
-            .ToList();
-
         var invoiceProjections = await db.StripeInvoices.ToDictionaryAsync(p => p.InvoiceId, ct);
         foreach (var invoice in invoices)
         {
@@ -122,6 +130,7 @@ public sealed class StripeSyncJob(
             proj.HostedInvoiceUrl = invoice.HostedInvoiceUrl;
             proj.CreatedAtSource = invoice.Created;
             proj.DueDate = invoice.DueDate;
+            proj.PaidAt = invoice.PaidAt;
             proj.ClientId = Resolve(invoice.SubscriptionId, invoice.CustomerId);
             proj.SourceSyncedAt = now;
         }
@@ -136,7 +145,6 @@ public sealed class StripeSyncJob(
         // that carry no invoice (which the invoice sweep can never see). The source
         // is tagged in SourceObjectId: an invoice id (in_…) ⇒ subscription payment,
         // a charge id (ch_…) ⇒ a direct payment — so analytics can split the two.
-        var charges = await stripe.ListChargesAsync(now - window, ct);
         foreach (var charge in charges)
         {
             if (!charge.Paid || charge.Status != "succeeded") continue;

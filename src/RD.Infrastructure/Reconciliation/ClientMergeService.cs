@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using RD.Domain;
 using RD.Domain.Entities;
+using RD.Infrastructure.Enforcement;
 
 namespace RD.Infrastructure.Reconciliation;
 
@@ -60,6 +61,16 @@ public sealed record MergeSnapshot
     public Guid[] DunningIds { get; init; } = [];
     public Guid[] ClosedInvestigationIds { get; init; } = [];
     public Guid[] InvalidatedVerificationIds { get; init; } = [];
+    public Guid[] KnownLedgerEntryIds { get; init; } = [];
+    public Guid[] KnownIdentityLinkIds { get; init; } = [];
+    public Guid[] KnownConvertIntentIds { get; init; } = [];
+    public Guid[] KnownTrialIds { get; init; } = [];
+    public Guid[] KnownPauseIds { get; init; } = [];
+    public Guid[] KnownDunningIds { get; init; } = [];
+    public Guid[] KnownInvestigationIds { get; init; } = [];
+    public Guid[] KnownOutboxIds { get; init; } = [];
+    public string[] KnownStripeSubscriptionIds { get; init; } = [];
+    public string[] KnownStripeInvoiceIds { get; init; } = [];
 
     /// <summary>Blank survivor fields the merge filled from the duplicate (see the Field* tokens).</summary>
     public string[] BackfilledFields { get; init; } = [];
@@ -70,7 +81,7 @@ public sealed record MergeSnapshot
     /// <summary>Whether the survivor's notes were empty before the merge (so unmerge nulls them vs. trims the appended line).</summary>
     public bool NotesWasEmpty { get; init; }
 
-    /// <summary>The duplicate's enforcement mode before it was set to Shadow on retirement — restored on unmerge.</summary>
+    /// <summary>The duplicate's pre-merge mode retained for audit; unmerge stays Shadow until re-verification.</summary>
     public EnforcementMode DuplicatePriorMode { get; init; }
 }
 
@@ -96,6 +107,11 @@ public sealed record MergeSnapshot
 /// </summary>
 public sealed class ClientMergeService(IDbContextFactory<RdDbContext> factory, IClock clock)
 {
+    private const string BillingRelevantConversionBlock =
+        "One of these accounts has a conversion that can still bill or receive a late payment. Resolve or reconcile it before changing client ownership.";
+    private const string PostMergeActivityBlock =
+        "This merge can only be reversed before either account records post-merge billing or operational activity. Reconcile this merge manually so immutable history is not assigned to the wrong client.";
+
     private static readonly JsonSerializerOptions Json = new()
     {
         Converters = { new JsonStringEnumConverter() },
@@ -109,6 +125,11 @@ public sealed class ClientMergeService(IDbContextFactory<RdDbContext> factory, I
 
         var blocked = Validate(survivorId, duplicateId, survivor, duplicate,
             await AbsorbedOthers(db, duplicateId, ct));
+        if (blocked is null
+            && await HasBillingRelevantConversionAsync(db, survivorId, duplicateId, ct))
+        {
+            blocked = BillingRelevantConversionBlock;
+        }
 
         var links = await db.IdentityLinks.CountAsync(l => l.ClientId == duplicateId && l.InvalidatedAt == null, ct);
         var ledger = await db.LedgerEntries.CountAsync(l => l.ClientId == duplicateId, ct);
@@ -123,7 +144,14 @@ public sealed class ClientMergeService(IDbContextFactory<RdDbContext> factory, I
 
     public async Task<MergeResult> MergeAsync(Guid survivorId, Guid duplicateId, string actor, CancellationToken ct = default)
     {
+        if (survivorId == duplicateId)
+            return new MergeResult(false, "A client can't be merged into itself.");
+
         await using var db = await factory.CreateDbContextAsync(ct);
+        var (firstFenceId, secondFenceId) = OrderedClientIds(survivorId, duplicateId);
+        await using var firstFence = await ClientMutationFence.AcquireAsync(db, firstFenceId, ct);
+        await using var secondFence = await ClientMutationFence.AcquireAsync(db, secondFenceId, ct);
+        await using var ownershipFence = await ClientMutationFence.AcquireMappingOwnershipAsync(db, ct);
         var now = clock.UtcNow;
 
         var survivor = await db.Clients.FirstOrDefaultAsync(c => c.Id == survivorId, ct);
@@ -132,6 +160,8 @@ public sealed class ClientMergeService(IDbContextFactory<RdDbContext> factory, I
         var blocked = Validate(survivorId, duplicateId, survivor, duplicate,
             await AbsorbedOthers(db, duplicateId, ct));
         if (blocked is not null) return new MergeResult(false, blocked);
+        if (await HasBillingRelevantConversionAsync(db, survivorId, duplicateId, ct))
+            return new MergeResult(false, BillingRelevantConversionBlock);
 
         // 1. Re-parent every identity link — the core move. Future sync sweeps
         //    resolve these vendor ids to the survivor from now on.
@@ -165,9 +195,12 @@ public sealed class ClientMergeService(IDbContextFactory<RdDbContext> factory, I
             item.ResolutionNote = $"Resolved by merge into \"{survivor!.BusinessName}\".";
         }
 
-        // 5. Invalidate the duplicate's mapping verifications — its links have moved,
-        //    so any sign-off no longer describes reality.
-        var invalidatedVerifications = await db.MappingVerifications.Where(v => v.ClientId == duplicateId && v.InvalidatedAt == null).ToListAsync(ct);
+        // 5. Invalidate both accounts' mapping verifications because their
+        //    required-link sets changed and prior sign-off no longer describes reality.
+        var affectedClientIds = new[] { survivorId, duplicateId };
+        var invalidatedVerifications = await db.MappingVerifications
+            .Where(v => affectedClientIds.Contains(v.ClientId) && v.InvalidatedAt == null)
+            .ToListAsync(ct);
         foreach (var v in invalidatedVerifications) v.InvalidatedAt = now;
 
         // 6. Survivor wins; fill only its blank profile fields from the duplicate.
@@ -203,6 +236,13 @@ public sealed class ClientMergeService(IDbContextFactory<RdDbContext> factory, I
         duplicate.MergedIntoClientId = survivorId;
         duplicate.MergedAt = now;
         duplicate.EnforcementMode = EnforcementMode.Shadow;
+        survivor.EnforcementMode = EnforcementMode.Shadow;
+
+        await SupersedeNonterminalActionsAsync(
+            db,
+            affectedClientIds,
+            "Superseded because a client merge changed the complete identity mapping; re-verify before staging new work.",
+            ct);
 
         // 8. Record exactly what moved, so the merge is deterministically reversible.
         var snapshot = new MergeSnapshot
@@ -215,6 +255,39 @@ public sealed class ClientMergeService(IDbContextFactory<RdDbContext> factory, I
             DunningIds = dunning.Select(d => d.Id).ToArray(),
             ClosedInvestigationIds = closedItems.Select(i => i.Id).ToArray(),
             InvalidatedVerificationIds = invalidatedVerifications.Select(v => v.Id).ToArray(),
+            KnownLedgerEntryIds = await db.LedgerEntries
+                .Where(row => affectedClientIds.Contains(row.ClientId))
+                .Select(row => row.Id).ToArrayAsync(ct),
+            KnownIdentityLinkIds = await db.IdentityLinks
+                .Where(link => affectedClientIds.Contains(link.ClientId))
+                .Select(link => link.Id).ToArrayAsync(ct),
+            KnownConvertIntentIds = await db.ConvertIntents
+                .Where(intent => affectedClientIds.Contains(intent.ClientId))
+                .Select(intent => intent.Id).ToArrayAsync(ct),
+            KnownTrialIds = await db.TrialPeriods
+                .Where(trial => affectedClientIds.Contains(trial.ClientId))
+                .Select(trial => trial.Id).ToArrayAsync(ct),
+            KnownPauseIds = await db.PauseOperations
+                .Where(pause => affectedClientIds.Contains(pause.ClientId))
+                .Select(pause => pause.Id).ToArrayAsync(ct),
+            KnownDunningIds = await db.DunningCases
+                .Where(dunningCase => affectedClientIds.Contains(dunningCase.ClientId))
+                .Select(dunningCase => dunningCase.Id).ToArrayAsync(ct),
+            KnownInvestigationIds = await db.InvestigationItems
+                .Where(item => item.ClientId != null
+                               && affectedClientIds.Contains(item.ClientId.Value))
+                .Select(item => item.Id).ToArrayAsync(ct),
+            KnownOutboxIds = await db.OutboxActions
+                .Where(action => affectedClientIds.Contains(action.ClientId))
+                .Select(action => action.Id).ToArrayAsync(ct),
+            KnownStripeSubscriptionIds = await db.StripeSubscriptions
+                .Where(subscription => subscription.ClientId != null
+                                       && affectedClientIds.Contains(subscription.ClientId.Value))
+                .Select(subscription => subscription.SubscriptionId).ToArrayAsync(ct),
+            KnownStripeInvoiceIds = await db.StripeInvoices
+                .Where(invoice => invoice.ClientId != null
+                                  && affectedClientIds.Contains(invoice.ClientId.Value))
+                .Select(invoice => invoice.InvoiceId).ToArrayAsync(ct),
             BackfilledFields = [.. backfilled],
             NoteLineAppended = noteLine,
             NotesWasEmpty = notesWasEmpty,
@@ -252,6 +325,15 @@ public sealed class ClientMergeService(IDbContextFactory<RdDbContext> factory, I
 
         var (blocked, survivorName) = await ValidateUnmerge(db, duplicate, audit, ct);
         var snapshot = audit is not null ? Deserialize(audit) : null;
+        if (blocked is null && audit is not null)
+        {
+            if (await HasBillingRelevantConversionAsync(db, duplicateId, audit.SurvivorId, ct))
+                blocked = BillingRelevantConversionBlock;
+            else if (snapshot is not null
+                     && await HasPostMergeActivityAsync(
+                         db, duplicateId, audit.SurvivorId, snapshot, ct))
+                blocked = PostMergeActivityBlock;
+        }
 
         return new UnmergePreview(
             duplicateId, audit?.SurvivorId,
@@ -265,10 +347,39 @@ public sealed class ClientMergeService(IDbContextFactory<RdDbContext> factory, I
     public async Task<UnmergeResult> UnmergeAsync(Guid duplicateId, string actor, CancellationToken ct = default)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
+        var preliminaryAudit = await db.ClientMergeAudits.AsNoTracking()
+            .Where(a => a.DuplicateId == duplicateId && a.ReversedAt == null)
+            .OrderByDescending(a => a.MergedAt)
+            .FirstOrDefaultAsync(ct);
+        if (preliminaryAudit is null)
+        {
+            var preliminaryDuplicate = await db.Clients.AsNoTracking()
+                .FirstOrDefaultAsync(c => c.Id == duplicateId, ct);
+            var (preliminaryBlocked, _) = await ValidateUnmerge(
+                db, preliminaryDuplicate, audit: null, ct: ct);
+            return new UnmergeResult(false, preliminaryBlocked ?? "No live merge was found.");
+        }
+
+        var (firstFenceId, secondFenceId) = OrderedClientIds(duplicateId, preliminaryAudit.SurvivorId);
+        await using var firstFence = await ClientMutationFence.AcquireAsync(db, firstFenceId, ct);
+        await using var secondFence = await ClientMutationFence.AcquireAsync(db, secondFenceId, ct);
+        await using var ownershipFence = await ClientMutationFence.AcquireMappingOwnershipAsync(db, ct);
         var now = clock.UtcNow;
 
         var duplicate = await db.Clients.FirstOrDefaultAsync(c => c.Id == duplicateId, ct);
         var audit = await LiveAudit(db, duplicateId, ct);
+
+        // The live merge may have changed while this call waited for the two
+        // preliminary client fences. Never proceed against a new survivor whose
+        // fence we do not hold; the operator can refresh and retry instead.
+        if (audit is null
+            || audit.Id != preliminaryAudit.Id
+            || audit.SurvivorId != preliminaryAudit.SurvivorId
+            || duplicate?.MergedIntoClientId != audit.SurvivorId)
+        {
+            return new UnmergeResult(false,
+                "This merge changed while the unmerge was waiting. Refresh and try again.");
+        }
 
         var (blocked, _) = await ValidateUnmerge(db, duplicate, audit, ct);
         if (blocked is not null) return new UnmergeResult(false, blocked);
@@ -277,6 +388,10 @@ public sealed class ClientMergeService(IDbContextFactory<RdDbContext> factory, I
         if (survivor is null) return new UnmergeResult(false, "The surviving account no longer exists — can't unmerge.");
 
         var snap = Deserialize(audit!);
+        if (await HasBillingRelevantConversionAsync(db, duplicateId, survivor.Id, ct))
+            return new UnmergeResult(false, BillingRelevantConversionBlock);
+        if (await HasPostMergeActivityAsync(db, duplicateId, survivor.Id, snap, ct))
+            return new UnmergeResult(false, PostMergeActivityBlock);
 
         // 1. Move identity links back — only those still parented on the survivor
         //    (something merged/relinked later shouldn't be clobbered by this undo).
@@ -303,9 +418,15 @@ public sealed class ClientMergeService(IDbContextFactory<RdDbContext> factory, I
             item.ResolutionNote = null;
         }
 
-        // 5. Un-invalidate the mapping verifications this merge invalidated (if untouched).
-        foreach (var v in await db.MappingVerifications.Where(v => snap.InvalidatedVerificationIds.Contains(v.Id)).ToListAsync(ct))
-            if (v.InvalidatedAt == audit!.MergedAt) v.InvalidatedAt = null;
+        // 5. Unmerge changes both required-link sets. Any live verification on
+        //    either side is now stale; pre-merge snapshots are never revived.
+        var affectedClientIds = new[] { survivor.Id, duplicateId };
+        foreach (var verification in await db.MappingVerifications
+                     .Where(v => affectedClientIds.Contains(v.ClientId) && v.InvalidatedAt == null)
+                     .ToListAsync(ct))
+        {
+            verification.InvalidatedAt = now;
+        }
 
         // 6. Roll back the profile blanks the merge filled — but only where the
         //    survivor still holds the value the merge copied in (never clobber a
@@ -343,10 +464,18 @@ public sealed class ClientMergeService(IDbContextFactory<RdDbContext> factory, I
             }
         }
 
-        // 8. Un-retire the duplicate and restore its prior enforcement mode.
+        // 8. Un-retire the duplicate. Both accounts remain Shadow until an
+        //    operator verifies their new, separate identity sets.
         duplicate!.MergedIntoClientId = null;
         duplicate.MergedAt = null;
-        duplicate.EnforcementMode = snap.DuplicatePriorMode;
+        duplicate.EnforcementMode = EnforcementMode.Shadow;
+        survivor.EnforcementMode = EnforcementMode.Shadow;
+
+        await SupersedeNonterminalActionsAsync(
+            db,
+            affectedClientIds,
+            "Superseded because unmerge changed the complete identity mapping; re-verify each account before staging new work.",
+            ct);
 
         // 9. Stamp the audit as reversed — kept for history, never reused.
         audit!.ReversedAt = now;
@@ -362,7 +491,7 @@ public sealed class ClientMergeService(IDbContextFactory<RdDbContext> factory, I
         }
 
         return new UnmergeResult(true,
-            $"Unmerged \"{duplicate.BusinessName}\" from \"{survivor.BusinessName}\". {links.Count} link(s) moved back; the account is live again.",
+            $"Unmerged \"{duplicate.BusinessName}\" from \"{survivor.BusinessName}\". {links.Count} link(s) moved back; both accounts remain Shadow until their separate mappings are verified.",
             duplicateId);
     }
 
@@ -398,6 +527,94 @@ public sealed class ClientMergeService(IDbContextFactory<RdDbContext> factory, I
     /// <summary>Does this client already have other accounts merged into it?</summary>
     private static async Task<bool> AbsorbedOthers(RdDbContext db, Guid clientId, CancellationToken ct) =>
         await db.Clients.AnyAsync(c => c.MergedIntoClientId == clientId, ct);
+
+    private static (Guid First, Guid Second) OrderedClientIds(Guid left, Guid right) =>
+        left.CompareTo(right) <= 0 ? (left, right) : (right, left);
+
+    private static Task<bool> HasBillingRelevantConversionAsync(
+        RdDbContext db, Guid firstClientId, Guid secondClientId, CancellationToken ct) =>
+        db.ConvertIntents.AnyAsync(
+            intent => (intent.ClientId == firstClientId || intent.ClientId == secondClientId)
+                      && (intent.State == ConvertIntentState.Drafted
+                          || intent.State == ConvertIntentState.AwaitingPayment
+                          || intent.State == ConvertIntentState.Paid
+                          || intent.State == ConvertIntentState.Expired),
+            ct);
+
+    /// <summary>
+    /// Once either side records new operational history, snapshot reversal can no
+    /// longer prove which business originated append-only rows. Fail closed rather
+    /// than split money or enforcement history across the restored accounts.
+    /// </summary>
+    private static async Task<bool> HasPostMergeActivityAsync(
+        RdDbContext db,
+        Guid duplicateId,
+        Guid survivorId,
+        MergeSnapshot snapshot,
+        CancellationToken ct)
+    {
+        var ids = new[] { duplicateId, survivorId };
+        return await db.LedgerEntries.AnyAsync(
+                   row => ids.Contains(row.ClientId)
+                          && !snapshot.KnownLedgerEntryIds.Contains(row.Id), ct)
+               || await db.IdentityLinks.AnyAsync(
+                   link => ids.Contains(link.ClientId)
+                           && !snapshot.KnownIdentityLinkIds.Contains(link.Id), ct)
+               || await db.ConvertIntents.AnyAsync(
+                   intent => ids.Contains(intent.ClientId)
+                             && !snapshot.KnownConvertIntentIds.Contains(intent.Id), ct)
+               || await db.TrialPeriods.AnyAsync(
+                   trial => ids.Contains(trial.ClientId)
+                            && !snapshot.KnownTrialIds.Contains(trial.Id), ct)
+               || await db.PauseOperations.AnyAsync(
+                   pause => ids.Contains(pause.ClientId)
+                            && !snapshot.KnownPauseIds.Contains(pause.Id), ct)
+               || await db.DunningCases.AnyAsync(
+                   dunning => ids.Contains(dunning.ClientId)
+                              && !snapshot.KnownDunningIds.Contains(dunning.Id), ct)
+               || await db.InvestigationItems.AnyAsync(
+                   item => item.ClientId != null
+                           && ids.Contains(item.ClientId.Value)
+                           && !snapshot.KnownInvestigationIds.Contains(item.Id), ct)
+               || await db.OutboxActions.AnyAsync(
+                   action => ids.Contains(action.ClientId)
+                             && !snapshot.KnownOutboxIds.Contains(action.Id), ct)
+               || await db.StripeSubscriptions.AnyAsync(
+                   subscription => subscription.ClientId != null
+                                   && ids.Contains(subscription.ClientId.Value)
+                                   && !snapshot.KnownStripeSubscriptionIds.Contains(
+                                       subscription.SubscriptionId), ct)
+               || await db.StripeInvoices.AnyAsync(
+                   invoice => invoice.ClientId != null
+                              && ids.Contains(invoice.ClientId.Value)
+                              && !snapshot.KnownStripeInvoiceIds.Contains(invoice.InvoiceId), ct);
+    }
+
+    private static async Task SupersedeNonterminalActionsAsync(
+        RdDbContext db,
+        IReadOnlyCollection<Guid> clientIds,
+        string reason,
+        CancellationToken ct)
+    {
+        var actions = await db.OutboxActions
+            .Where(action => clientIds.Contains(action.ClientId)
+                             && (action.Status == OutboxStatus.Pending
+                                 || action.Status == OutboxStatus.AwaitingApproval
+                                 || action.Status == OutboxStatus.Approved
+                                 || action.Status == OutboxStatus.Leased
+                                 || action.Status == OutboxStatus.Failed))
+            .ToListAsync(ct);
+        foreach (var action in actions)
+        {
+            action.Status = OutboxStatus.Superseded;
+            action.ActionVersion++;
+            action.LeaseOwner = null;
+            action.FencingToken = null;
+            action.LeaseUntil = null;
+            action.NextAttemptAt = null;
+            action.LastError = reason;
+        }
+    }
 
     private static string? Validate(Guid survivorId, Guid duplicateId, Client? survivor, Client? duplicate, bool duplicateAbsorbedOthers)
     {

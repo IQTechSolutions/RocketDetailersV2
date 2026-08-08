@@ -12,7 +12,7 @@ namespace RD.Tests.Domain;
 public class ConvertDrafterTests
 {
     private static ConvertDraftInput OwnReady(string? customer = "cus_123") =>
-        new(AccountType.Own, "USD", HasPackage: true, EffectiveStripePriceId: "price_abc", FirstStripeCustomerId: customer);
+        new(AccountType.Own, "USD", HasPackage: true, EffectiveStripePriceId: "price_abc", StripeCustomerId: customer);
 
     [Fact]
     public void Own_account_usd_with_price_and_customer_is_ready()
@@ -80,9 +80,59 @@ public class ConvertDrafterTests
     {
         var d = ConvertDrafter.Draft(
             new ConvertDraftInput(AccountType.Master, "ZAR", HasPackage: true,
-                EffectiveStripePriceId: null, FirstStripeCustomerId: null));
+                EffectiveStripePriceId: null, StripeCustomerId: null));
 
         d.Ready.Should().BeFalse();
         d.Blockers.Should().HaveCount(3); // master + non-USD + no price
+    }
+
+    [Fact]
+    public void Multiple_customers_without_a_preference_block_the_draft_instead_of_creating_another_customer()
+    {
+        var draft = ConvertDrafter.Draft(new ConvertDraftInput(
+            AccountType.Own, "USD", HasPackage: true, EffectiveStripePriceId: "price_abc",
+            StripeCustomerId: null, HasAmbiguousStripeCustomers: true));
+
+        draft.Ready.Should().BeFalse();
+        draft.WouldCreateCustomer.Should().BeFalse();
+        draft.StripeCustomerId.Should().BeNull();
+        draft.Blockers.Should().ContainSingle(b => b.Contains("preferred billing customer"));
+    }
+
+    [Fact]
+    public void Open_customer_ownership_investigation_blocks_billing_even_with_a_preference()
+    {
+        var draft = ConvertDrafter.Draft(OwnReady() with { HasOpenStripeOwnershipInvestigation = true });
+
+        draft.Ready.Should().BeFalse();
+        draft.StripeCustomerId.Should().Be("cus_123");
+        draft.Blockers.Should().ContainSingle(b => b.Contains("ownership is still unconfirmed"));
+    }
+
+    [Fact]
+    public void Existing_current_subscription_blocks_creation_of_a_second_subscription()
+    {
+        var draft = ConvertDrafter.Draft(OwnReady() with { HasExistingNonTerminalStripeSubscription = true });
+
+        draft.Ready.Should().BeFalse();
+        draft.Blockers.Should().ContainSingle(b => b.Contains("creating a second subscription"));
+    }
+
+    [Fact]
+    public void Subscription_without_a_matching_customer_link_blocks_billing()
+    {
+        var draft = ConvertDrafter.Draft(OwnReady() with { HasSubscriptionWithoutCustomerLink = true });
+
+        draft.Ready.Should().BeFalse();
+        draft.Blockers.Should().ContainSingle(b => b.Contains("no matching active customer link"));
+    }
+
+    [Fact]
+    public void Missing_fresh_Stripe_evidence_blocks_billing()
+    {
+        var draft = ConvertDrafter.Draft(OwnReady() with { StripeEvidenceIsFresh = false });
+
+        draft.Ready.Should().BeFalse();
+        draft.Blockers.Should().ContainSingle(b => b.Contains("complete a Stripe sync"));
     }
 }

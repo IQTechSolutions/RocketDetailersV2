@@ -90,6 +90,10 @@ builder.Services.AddScoped<OpsService>();
 builder.Services.AddScoped<GhlContactAdminService>();
 builder.Services.AddScoped<ClientMergeService>();
 builder.Services.AddScoped<LegacyInvestigationCleanup>();
+// Registered now, activated in a follow-up release after this binary is the
+// rollback baseline. Activating hidden legacy Stripe links before that would
+// make rollback to arbitrary-first-customer billing unsafe.
+builder.Services.AddScoped<LegacySpreadsheetStripeLinkRepair>();
 builder.Services.AddScoped<IdentityAdminService>();
 builder.Services.AddScoped<PasswordResetService>();
 builder.Services.AddSingleton<VendorLinks>();

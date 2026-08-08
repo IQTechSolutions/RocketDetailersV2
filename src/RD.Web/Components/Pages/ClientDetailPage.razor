@@ -9,6 +9,7 @@
 @inject ConvertService Convert
 @inject ConvertBillingService Billing
 @inject TrialAdminService Trials
+@inject MappingWizardService Wizard
 @inject IDialogService Dialogs
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
@@ -245,10 +246,28 @@ else
                     <MudText Typo="Typo.h6">Identity links</MudText>
                     <HelpHint Text="How this client is known in each external system. A link must be active (not invalidated) for the engine to use it; verification pins it for enforcement." />
                     <MudSpacer />
+                    @if (_detail.Links.Count(IsActiveStripeCustomer) > 1)
+                    {
+                        <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="preferredCustomerAuth">
+                            <MudTooltip Arrow="true" Text="Choose which linked Stripe customer Rocket Detailer uses for new subscriptions. All linked accounts stay monitored.">
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                                           StartIcon="@Icons.Material.Filled.SwapHoriz"
+                                           OnClick="OpenChangePreferredStripeCustomerAsync">Change preferred…</MudButton>
+                            </MudTooltip>
+                        </AuthorizeView>
+                    }
                     <AddGhlContactButton ClientId="@c.Id" Email="@c.Email" Name="@c.BusinessName"
                                          Show="@(!_detail.Links.Any(l => l.System == ExternalSystem.Ghl && l.Kind == LinkKind.Contact))"
                                          OnCreated="ReloadAsync" />
                 </MudStack>
+                @if (_detail.Links.Count(IsActiveStripeCustomer) > 1
+                     && !_detail.Links.Any(IsPreferredStripeCustomer))
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                        No preferred Stripe customer is selected for new subscriptions. All linked accounts are still monitored;
+                        an operator must choose a preference before creating a new subscription.
+                    </MudAlert>
+                }
                 @if (_detail.Links.Count == 0)
                 {
                     <EmptyState Icon="@Icons.Material.Outlined.LinkOff" Title="No identity links"
@@ -268,6 +287,14 @@ else
                                     <td>@l.Kind.Label()</td>
                                     <td>
                                         <code style="font-size:.75rem;">@l.ExternalId</code>
+                                        @if (IsPreferredStripeCustomer(l))
+                                        {
+                                            <MudTooltip Arrow="true" Text="Used when Rocket Detailer creates a new subscription. Existing billing stays on its current account, and other linked accounts remain monitored.">
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info" Class="ml-1">
+                                                    Preferred billing
+                                                </MudChip>
+                                            </MudTooltip>
+                                        }
                                         @if (_detail.ExternalLinks.TryGetValue(l.Id, out var url))
                                         {
                                             <MudTooltip Arrow="true" Text="@VendorLinks.Label(l.System)">
@@ -439,19 +466,61 @@ else
             await ReloadAsync();
     }
 
+    private async Task OpenChangePreferredStripeCustomerAsync()
+    {
+        if (_detail is null) return;
+
+        var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+        if (!Roles.OperatorRoles.Any(user.IsInRole))
+        {
+            Snackbar.Add("Changing the preferred Stripe customer requires the Operator role.", Severity.Warning);
+            return;
+        }
+
+        var choice = await Wizard.GetStripeCustomerChoice(_detail.Client.Id);
+        if (choice.Candidates.Count < 2)
+        {
+            Snackbar.Add("This client no longer has multiple active Stripe customers to choose from.", Severity.Info);
+            await ReloadAsync();
+            return;
+        }
+
+        var parameters = new DialogParameters<ResolveDuplicateStripeDialog>
+        {
+            { d => d.ClientName, _detail.Client.BusinessName },
+            { d => d.Choice, choice },
+            { d => d.ConfirmSameBusiness, false },
+        };
+        var dialog = await Dialogs.ShowAsync<ResolveDuplicateStripeDialog>(null, parameters);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not string preferred) return;
+
+        var actor = user.Identity?.Name ?? "operator";
+        var write = await Wizard.ChangePreferredStripeCustomer(_detail.Client.Id, preferred, actor);
+        Snackbar.Add(write.Message, write.Ok ? Severity.Success : Severity.Warning);
+        if (write.Ok) await ReloadAsync();
+    }
+
     private async Task ApproveAndBillAsync()
     {
         if (_convertDraft is not { } cd) return;
         var confirmed = await Dialogs.ShowMessageBoxAsync(
             "Approve & bill this conversion?",
-            "This creates a REAL Stripe subscription and starts recurring billing for this client. Nothing else is charged until they pay the first invoice.",
+            $"This creates a REAL Stripe subscription using price {cd.Draft.StripePriceId} for " +
+            (cd.Draft.WouldCreateCustomer ? "a new Stripe customer" : $"Stripe customer {cd.Draft.StripeCustomerId}") +
+            ". Nothing else is charged until they pay the first invoice.",
             yesText: "Approve & bill", cancelText: "Cancel");
         if (confirmed != true) return;
 
         _billing = true;
         StateHasChanged();
         var actor = (await AuthProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "operator";
-        var result = await Billing.ExecuteAsync(cd.IntentId, actor);
+        var result = await Billing.ExecuteAsync(
+            cd.IntentId,
+            actor,
+            cd.Draft.StripePriceId,
+            cd.Draft.StripeCustomerId,
+            cd.Draft.WouldCreateCustomer);
         _billing = false;
         Snackbar.Add(result.Message, result.Ok ? Severity.Success : Severity.Warning);
         await ReloadAsync();
@@ -537,4 +606,17 @@ else
         AccountIssueSeverity.Warning => Severity.Warning,
         _ => Severity.Info,
     };
+
+    private static bool IsActiveStripeCustomer(IdentityLink link)
+        => link.System == ExternalSystem.Stripe
+           && link.Kind == LinkKind.Customer
+           && link.InvalidatedAt is null;
+
+    private bool IsPreferredStripeCustomer(IdentityLink link)
+        => _detail is not null
+           && IsActiveStripeCustomer(link)
+           && string.Equals(
+               link.ExternalId,
+               _detail.Client.PreferredStripeCustomerId,
+               StringComparison.Ordinal);
 }

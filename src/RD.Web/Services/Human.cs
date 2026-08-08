@@ -14,7 +14,7 @@ public static class Human
     public static string Title(this InvestigationKind kind) => kind switch
     {
         InvestigationKind.UnmappedIdentity => "no Stripe subscription linked",
-        InvestigationKind.DuplicateStripeCustomer => "duplicate Stripe customers",
+        InvestigationKind.DuplicateStripeCustomer => "multiple Stripe customers to confirm",
         InvestigationKind.ExternallyPausedPayment => "recorded external campaign pause for a paid-up client",
         InvestigationKind.CanceledSubPayment => "payment received on a canceled subscription",
         InvestigationKind.NonUsdCurrency => "billed in a non-USD currency",
@@ -31,7 +31,7 @@ public static class Human
     public static string WhyItMatters(this InvestigationKind kind) => kind switch
     {
         InvestigationKind.UnmappedIdentity => "Enforcement impossible — billing can't drive ads until the subscription is linked.",
-        InvestigationKind.DuplicateStripeCustomer => "Risk of double billing the same business.",
+        InvestigationKind.DuplicateStripeCustomer => "Confirm these accounts belong to one business and choose which customer new subscriptions should use; every linked account stays monitored.",
         InvestigationKind.ExternallyPausedPayment => "Opened when a linked campaign was reported paused outside the app. Review current evidence; the app never auto-resumes a pause it didn't create.",
         InvestigationKind.CanceledSubPayment => "A payment can't reactivate a canceled subscription — needs a re-subscribe.",
         InvestigationKind.NonUsdCurrency => "v1 is USD-only; these clients are excluded from the company exposure number.",

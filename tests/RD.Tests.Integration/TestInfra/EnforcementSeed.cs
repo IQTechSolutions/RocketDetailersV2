@@ -1,5 +1,6 @@
 using RD.Domain;
 using RD.Domain.Entities;
+using System.Text.Json;
 
 namespace RD.Tests.Integration.TestInfra;
 
@@ -23,11 +24,17 @@ public static class EnforcementSeed
         };
         ctx.Clients.Add(client);
 
-        void Link(ExternalSystem s, LinkKind k, string ext) => ctx.IdentityLinks.Add(new IdentityLink
+        var pins = new List<object>();
+        void Link(ExternalSystem s, LinkKind k, string ext)
         {
-            Id = Guid.NewGuid(), ClientId = client.Id, System = s, Kind = k, ExternalId = ext,
-            VerifiedAt = now, CreatedAt = now,
-        });
+            var link = new IdentityLink
+            {
+                Id = Guid.NewGuid(), ClientId = client.Id, System = s, Kind = k, ExternalId = ext,
+                VerifiedAt = now, CreatedAt = now,
+            };
+            ctx.IdentityLinks.Add(link);
+            pins.Add(new { linkId = link.Id, linkVersion = link.LinkVersion });
+        }
         Link(ExternalSystem.Stripe, LinkKind.Customer, CustomerId);
         Link(ExternalSystem.Stripe, LinkKind.Subscription, SubscriptionId);
         Link(ExternalSystem.Meta, LinkKind.Campaign, CampaignId);
@@ -35,7 +42,7 @@ public static class EnforcementSeed
 
         ctx.MappingVerifications.Add(new MappingVerification
         {
-            Id = Guid.NewGuid(), ClientId = client.Id, VerifiedLinksJson = "[]",
+            Id = Guid.NewGuid(), ClientId = client.Id, VerifiedLinksJson = JsonSerializer.Serialize(pins),
             VerifiedBy = "test", BlastRadiusAcknowledged = true, VerifiedAt = now,
         });
 

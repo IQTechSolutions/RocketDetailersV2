@@ -37,7 +37,7 @@
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-1" Wrap="Wrap.Wrap">
                         @if (row.OpenPriorityInvestigations > 0)
                         {
-                            <MudTooltip Arrow="true" Text="Open reconciliation items (unmapped identity, import conflict, or duplicate Stripe customer) — fix these first.">
+                            <MudTooltip Arrow="true" Text="Open reconciliation items (unmapped identity, import conflict, or a multiple-Stripe-customer confirmation) — fix these first.">
                                 <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning"
                                          Icon="@Icons.Material.Filled.PriorityHigh">
                                     @row.OpenPriorityInvestigations to reconcile

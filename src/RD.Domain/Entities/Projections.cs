@@ -32,6 +32,7 @@ public class StripeInvoiceProj
     public string? HostedInvoiceUrl { get; set; }
     public DateTimeOffset CreatedAtSource { get; set; }
     public DateTimeOffset? DueDate { get; set; }
+    public DateTimeOffset? PaidAt { get; set; }
     public DateTimeOffset SourceSyncedAt { get; set; }
 }
 

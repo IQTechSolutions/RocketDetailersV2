@@ -1,13 +1,18 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RD.Domain;
 using RD.Domain.Entities;
 using RD.Domain.Policy;
+using RD.Infrastructure;
 using RD.Infrastructure.Enforcement;
+using RD.Infrastructure.Gateways;
 using RD.Infrastructure.Sync;
 using RD.Tests.Integration.TestInfra;
+using RD.Web.Services;
 
 namespace RD.Tests.Integration;
 
@@ -302,6 +307,156 @@ public sealed class PolicyEvaluationJobTests : IDisposable
         dismissedAfter.ResolutionNote.Should().Be("Dismissed manually.");
     }
 
+    [Fact]
+    public async Task Mapping_change_crossing_an_Auto_stage_supersedes_the_stale_action_before_repromotion()
+    {
+        var clientId = EnforcementSeed.SeedMappedClient(
+            _db,
+            subscriptionStatus: "canceled",
+            campaignEffectiveStatus: "ACTIVE",
+            Now);
+        await using (var seed = _db.CreateContext())
+        {
+            (await seed.Clients.FindAsync(clientId))!.EnforcementMode = EnforcementMode.Auto;
+            await seed.SaveChangesAsync();
+        }
+
+        var saveGate = new OutboxStageSaveGate();
+        var interceptedFactory = new InterceptingFactory(_db.Options, saveGate);
+        var policyTask = CreateJob(interceptedFactory).RunAsync(CancellationToken.None);
+        await saveGate.Reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var mapping = CreateMappingService();
+        var mappingTask = mapping.AddOrReplaceLink(
+            clientId,
+            ExternalSystem.Meta,
+            LinkKind.Campaign,
+            "camp_added_while_staging",
+            "mapping-operator");
+
+        var first = await Task.WhenAny(mappingTask, Task.Delay(TimeSpan.FromMilliseconds(200)));
+        saveGate.Release.TrySetResult();
+        await policyTask;
+        var mappingResult = await mappingTask;
+
+        first.Should().NotBe(
+            mappingTask,
+            "the mapping mutation must wait until policy has committed its action under the client fence");
+        mappingResult.Ok.Should().BeTrue(mappingResult.Message);
+
+        await using (var verify = _db.CreateContext())
+        {
+            (await verify.Clients.FindAsync(clientId))!.EnforcementMode.Should().Be(EnforcementMode.Shadow);
+            var staged = await verify.OutboxActions.Where(action => action.ClientId == clientId).ToListAsync();
+            staged.Should().ContainSingle();
+            staged.Single().Status.Should().Be(OutboxStatus.Superseded);
+        }
+
+        // A later re-verification/promotion must not revive the approval that was
+        // calculated against the prior campaign set.
+        (await mapping.VerifyMapping(
+            clientId,
+            "Reviewed the complete post-change mapping.",
+            "mapping-operator",
+            blastRadiusAcknowledged: true)).Ok.Should().BeTrue();
+        (await mapping.PromoteToAssist(clientId)).Ok.Should().BeTrue();
+
+        await using var final = _db.CreateContext();
+        (await final.Clients.FindAsync(clientId))!.EnforcementMode.Should().Be(EnforcementMode.Assist);
+        (await final.OutboxActions.SingleAsync(action => action.ClientId == clientId)).Status
+            .Should().Be(OutboxStatus.Superseded);
+    }
+
+    [Fact]
+    public async Task Active_subscription_on_a_linked_secondary_customer_prevents_a_false_pause_without_a_subscription_link()
+    {
+        var clientId = EnforcementSeed.SeedMappedClient(
+            _db,
+            subscriptionStatus: "canceled",
+            campaignEffectiveStatus: "ACTIVE",
+            Now);
+        await using (var seed = _db.CreateContext())
+        {
+            seed.IdentityLinks.Add(new IdentityLink
+            {
+                Id = Guid.NewGuid(),
+                ClientId = clientId,
+                System = ExternalSystem.Stripe,
+                Kind = LinkKind.Customer,
+                ExternalId = "cus_secondary_active",
+                VerifiedAt = Now,
+                CreatedAt = Now,
+            });
+            seed.StripeSubscriptions.Add(new StripeSubscriptionProj
+            {
+                SubscriptionId = "sub_discovered_without_link",
+                ClientId = clientId,
+                CustomerId = "cus_secondary_active",
+                Status = "active",
+                SourceSyncedAt = Now,
+            });
+            await seed.SaveChangesAsync();
+
+            var pins = await seed.IdentityLinks
+                .Where(link => link.ClientId == clientId && link.InvalidatedAt == null)
+                .Select(link => new { linkId = link.Id, linkVersion = link.LinkVersion })
+                .ToListAsync();
+            (await seed.MappingVerifications.SingleAsync(v => v.ClientId == clientId)).VerifiedLinksJson =
+                System.Text.Json.JsonSerializer.Serialize(pins);
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = _db.CreateContext();
+        var builder = new ClientStateBuilder(_clock, Options.Create(new EnforcementOptions()));
+        var context = await builder.LoadContextAsync(db, CancellationToken.None);
+        var client = await db.Clients.SingleAsync(c => c.Id == clientId);
+        var state = await builder.BuildAsync(db, client, context, CancellationToken.None);
+        var verdict = EligibilityPolicy.Evaluate(state);
+
+        state.SubscriptionStatus.Should().Be("active");
+        state.MappingVerified.Should().BeTrue();
+        verdict.Action.Should().NotBe(ProposedActionType.Pause);
+    }
+
+    [Fact]
+    public async Task Linked_secondary_customer_open_invoice_is_seen_before_projection_client_is_restamped()
+    {
+        var clientId = EnforcementSeed.SeedMappedClient(
+            _db, subscriptionStatus: "active", campaignEffectiveStatus: "ACTIVE", Now);
+        await using (var seed = _db.CreateContext())
+        {
+            seed.IdentityLinks.Add(new IdentityLink
+            {
+                Id = Guid.NewGuid(), ClientId = clientId,
+                System = ExternalSystem.Stripe, Kind = LinkKind.Customer,
+                ExternalId = "cus_secondary_delinquent", VerifiedAt = Now, CreatedAt = Now,
+            });
+            seed.StripeInvoices.Add(new StripeInvoiceProj
+            {
+                InvoiceId = "in_secondary_delinquent",
+                ClientId = null,
+                CustomerId = "cus_secondary_delinquent",
+                Status = "uncollectible",
+                AmountDue = 100m,
+                AmountPaid = 0m,
+                CreatedAtSource = Now.AddDays(-5),
+                DueDate = Now.AddDays(-1),
+                SourceSyncedAt = Now,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = _db.CreateContext();
+        var builder = new ClientStateBuilder(_clock, Options.Create(new EnforcementOptions()));
+        var context = await builder.LoadContextAsync(db, CancellationToken.None);
+        var state = await builder.BuildAsync(
+            db, await db.Clients.SingleAsync(client => client.Id == clientId), context,
+            CancellationToken.None);
+
+        state.OpenUnpaidInvoices.Should().Be(1);
+        state.HasNewFailedCharge.Should().BeTrue();
+    }
+
     private async Task<(Guid ClientId, Guid PolicyItemId)> SeedOpenPolicyExternalPauseAsync()
     {
         var clientId = EnforcementSeed.SeedMappedClient(
@@ -333,15 +488,66 @@ public sealed class PolicyEvaluationJobTests : IDisposable
     };
 
     private PolicyEvaluationJob CreateJob()
+        => CreateJob(_db.Factory);
+
+    private PolicyEvaluationJob CreateJob(IDbContextFactory<RdDbContext> factory)
     {
         var options = Options.Create(new EnforcementOptions());
         return new PolicyEvaluationJob(
-            _db.Factory,
+            factory,
             new ClientStateBuilder(_clock, options),
             new ActionStager(_clock, options),
             _clock,
             NullLogger<PolicyEvaluationJob>.Instance);
     }
 
+    private MappingWizardService CreateMappingService()
+    {
+        var stripe = Options.Create(new StripeOptions { ApiKey = "rk_test_dummy" });
+        var links = new VendorLinks(
+            stripe,
+            Options.Create(new MetaOptions()),
+            Options.Create(new GhlOptions()),
+            new ConfigurationBuilder().Build());
+        return new MappingWizardService(_db.Factory, _clock, links, stripe);
+    }
+
     public void Dispose() => _db.Dispose();
+
+    private sealed class InterceptingFactory : IDbContextFactory<RdDbContext>
+    {
+        private readonly DbContextOptions<RdDbContext> _options;
+
+        public InterceptingFactory(DbContextOptions<RdDbContext> options, IInterceptor interceptor)
+        {
+            _options = new DbContextOptionsBuilder<RdDbContext>(options)
+                .AddInterceptors(interceptor)
+                .Options;
+        }
+
+        public RdDbContext CreateDbContext() => new(_options);
+    }
+
+    private sealed class OutboxStageSaveGate : SaveChangesInterceptor
+    {
+        public TaskCompletionSource Reached { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (eventData.Context?.ChangeTracker.Entries<OutboxAction>()
+                    .Any(entry => entry.State == EntityState.Added) == true)
+            {
+                Reached.TrySetResult();
+                await Release.Task.WaitAsync(TimeSpan.FromSeconds(15), cancellationToken);
+            }
+
+            return result;
+        }
+    }
 }

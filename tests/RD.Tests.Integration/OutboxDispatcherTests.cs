@@ -6,6 +6,7 @@ using RD.Domain;
 using RD.Domain.Entities;
 using RD.Infrastructure.Enforcement;
 using RD.Infrastructure.Gateways;
+using RD.Infrastructure.Reconciliation;
 using RD.Tests.Integration.TestInfra;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -26,7 +27,9 @@ public sealed class OutboxDispatcherTests : IDisposable
     private readonly WireMockServer _meta = WireMockServer.Start();
     private readonly TestClock _clock = new(Now);
 
-    private OutboxDispatcher BuildDispatcher(SafetyOptions safety)
+    private OutboxDispatcher BuildDispatcher(
+        SafetyOptions safety,
+        Func<Guid, CancellationToken, Task>? beforeClientFence = null)
     {
         var metaOptions = Options.Create(new MetaOptions { AccessToken = "t", AdAccountId = "act_1", BaseUrl = _meta.Urls[0] });
         var safetyOpt = Options.Create(safety);
@@ -36,7 +39,15 @@ public sealed class OutboxDispatcherTests : IDisposable
             Options.Create(new GhlOptions { BaseUrl = _meta.Urls[0], Locations = [] }), safetyOpt, retry);
         var enf = Options.Create(new EnforcementOptions());
         var builder = new ClientStateBuilder(_clock, enf);
-        return new OutboxDispatcher(_db.Factory, builder, metaGw, ghlGw, _clock, enf, NullLogger<OutboxDispatcher>.Instance);
+        return new OutboxDispatcher(
+            _db.Factory,
+            builder,
+            metaGw,
+            ghlGw,
+            _clock,
+            enf,
+            NullLogger<OutboxDispatcher>.Instance,
+            beforeClientFence);
     }
 
     private void StubCampaignGet(string status, string effectiveStatus) =>
@@ -67,6 +78,143 @@ public sealed class OutboxDispatcherTests : IDisposable
     }
 
     // ── The pause actually executes when the verdict still says pause ──
+
+    [Fact]
+    public async Task Approved_pause_is_superseded_without_a_vendor_write_after_client_is_demoted_to_shadow()
+    {
+        var clientId = EnforcementSeed.SeedMappedClient(
+            _db,
+            subscriptionStatus: "canceled",
+            campaignEffectiveStatus: "ACTIVE",
+            Now);
+        var actionId = EnforcementSeed.SeedApprovedPause(
+            _db,
+            clientId,
+            EnforcementSeed.CampaignId,
+            expectedEpoch: 0,
+            Now);
+        await using (var demote = _db.CreateContext())
+        {
+            (await demote.Clients.FindAsync(clientId))!.EnforcementMode = EnforcementMode.Shadow;
+            await demote.SaveChangesAsync();
+        }
+
+        await BuildDispatcher(new SafetyOptions { AllowProductionMetaWrites = true }).RunAsync(default);
+
+        await using var verify = _db.CreateContext();
+        (await verify.OutboxActions.FindAsync(actionId))!.Status.Should().Be(OutboxStatus.Superseded);
+        _meta.LogEntries.Where(entry => entry.RequestMessage.Method == "POST").Should().BeEmpty();
+        (await verify.PauseOperations.AnyAsync()).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Merge_committed_while_dispatch_waits_is_included_in_final_revalidation()
+    {
+        var survivorId = EnforcementSeed.SeedMappedClient(
+            _db,
+            subscriptionStatus: "active",
+            campaignEffectiveStatus: "ACTIVE",
+            Now);
+        Guid duplicateId;
+        await using (var seed = _db.CreateContext())
+        {
+            var survivor = (await seed.Clients.FindAsync(survivorId))!;
+            survivor.ArrangementStatus = ArrangementStatus.Confirmed;
+            survivor.ExpectedAmount = 100m;
+
+            duplicateId = Guid.NewGuid();
+            seed.Clients.Add(new Client
+            {
+                Id = duplicateId,
+                BusinessName = "Duplicate with covering payment",
+                ContractType = ContractType.Paid,
+                AccountType = AccountType.Master,
+                EnforcementMode = EnforcementMode.Shadow,
+                CurrencyCode = "USD",
+                CreatedAt = Now,
+            });
+            seed.LedgerEntries.AddRange(
+                new LedgerEntry
+                {
+                    Id = Guid.NewGuid(),
+                    ClientId = survivorId,
+                    Type = LedgerEntryType.AdSpend,
+                    OccurredAt = Now,
+                    SignedAmount = -500m,
+                    CurrencyCode = "USD",
+                    SourceSystem = ExternalSystem.Meta,
+                    SourceObjectId = "spend-before-merge",
+                },
+                new LedgerEntry
+                {
+                    Id = Guid.NewGuid(),
+                    ClientId = duplicateId,
+                    Type = LedgerEntryType.ChargePaid,
+                    OccurredAt = Now,
+                    SignedAmount = 500m,
+                    CurrencyCode = "USD",
+                    SourceSystem = ExternalSystem.Stripe,
+                    SourceObjectId = "payment-on-duplicate",
+                });
+            await seed.SaveChangesAsync();
+        }
+
+        var actionId = EnforcementSeed.SeedApprovedPause(
+            _db,
+            survivorId,
+            EnforcementSeed.CampaignId,
+            expectedEpoch: 0,
+            Now);
+        _meta.Given(Request.Create().WithPath($"/{EnforcementSeed.CampaignId}").UsingGet())
+            .InScenario("merge-crossing-pause")
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
+                .WithBody($$"""{"id":"{{EnforcementSeed.CampaignId}}","status":"ACTIVE","effective_status":"ACTIVE"}"""));
+        _meta.Given(Request.Create().WithPath($"/{EnforcementSeed.CampaignId}").UsingPost())
+            .InScenario("merge-crossing-pause")
+            .WillSetStateTo("paused")
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
+                .WithBody("""{"success":true}"""));
+        _meta.Given(Request.Create().WithPath($"/{EnforcementSeed.CampaignId}").UsingGet())
+            .InScenario("merge-crossing-pause")
+            .WhenStateIs("paused")
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
+                .WithBody($$"""{"id":"{{EnforcementSeed.CampaignId}}","status":"PAUSED","effective_status":"PAUSED"}"""));
+
+        var fenceCommandReached = new TaskCompletionSource<Guid>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFenceCommand = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task BeforeClientFence(Guid clientId, CancellationToken ct)
+        {
+            fenceCommandReached.TrySetResult(clientId);
+            await releaseFenceCommand.Task.WaitAsync(ct);
+        }
+
+        var dispatcher = BuildDispatcher(
+            new SafetyOptions { AllowProductionMetaWrites = true },
+            BeforeClientFence);
+
+        var dispatchTask = dispatcher.RunAsync(default);
+        var waitingClientId = await fenceCommandReached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        waitingClientId.Should().Be(survivorId);
+
+        try
+        {
+            var merge = await new ClientMergeService(_db.Factory, _clock)
+                .MergeAsync(survivorId, duplicateId, "merge-test");
+            merge.Ok.Should().BeTrue();
+        }
+        finally
+        {
+            releaseFenceCommand.TrySetResult();
+        }
+        await dispatchTask;
+
+        await using var verify = _db.CreateContext();
+        (await verify.OutboxActions.FindAsync(actionId))!.Status.Should().Be(OutboxStatus.Superseded);
+        _meta.LogEntries.Where(entry => entry.RequestMessage.Method == "POST").Should().BeEmpty();
+        (await verify.PauseOperations.AnyAsync()).Should().BeFalse();
+    }
 
     [Fact]
     public async Task Approved_pause_executes_and_records_provenance_when_verdict_holds()

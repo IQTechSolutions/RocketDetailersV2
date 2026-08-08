@@ -114,8 +114,15 @@ public class ClientDirectoryService(IDbContextFactory<RdDbContext> factory, Vend
             .OrderByDescending(i => i.CreatedAt)
             .ToListAsync(ct);
 
-        var hasCurrentVerification = await db.MappingVerifications.AsNoTracking()
-            .AnyAsync(v => v.ClientId == id && v.InvalidatedAt == null, ct);
+        var currentVerificationJson = await db.MappingVerifications.AsNoTracking()
+            .Where(v => v.ClientId == id && v.InvalidatedAt == null)
+            .OrderByDescending(v => v.VerifiedAt)
+            .Select(v => v.VerifiedLinksJson)
+            .FirstOrDefaultAsync(ct);
+        var hasCurrentVerification = MappingVerificationCoverage.PinsAll(
+            currentVerificationJson,
+            links.Where(l => l.InvalidatedAt == null && RequiredLinks.IsRequired(l.System, l.Kind))
+                .Select(l => (l.Id, l.LinkVersion)));
 
         var health = BuildHealth(client, links, openInvestigations, hasCurrentVerification);
 
@@ -207,9 +214,9 @@ public class ClientDirectoryService(IDbContextFactory<RdDbContext> factory, Vend
     private static AccountIssueSeverity SeverityFor(InvestigationKind kind) => kind switch
     {
         InvestigationKind.UnmappedIdentity
-            or InvestigationKind.DuplicateStripeCustomer
             or InvestigationKind.ExposureCapExceeded
             or InvestigationKind.ImportConflict => AccountIssueSeverity.Error,
+        InvestigationKind.DuplicateStripeCustomer => AccountIssueSeverity.Warning,
         InvestigationKind.StaleSync
             or InvestigationKind.NonUsdCurrency
             or InvestigationKind.Other => AccountIssueSeverity.Info,

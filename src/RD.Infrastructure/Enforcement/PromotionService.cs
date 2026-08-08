@@ -119,8 +119,23 @@ public sealed class PromotionService(IDbContextFactory<RdDbContext> dbFactory, I
         var exercised = await db.OutboxActions.AsNoTracking()
             .AnyAsync(a => a.ClientId == client.Id && a.Status == OutboxStatus.Executed, ct);
 
-        var mappingVerified = await db.MappingVerifications.AsNoTracking()
-            .AnyAsync(v => v.ClientId == client.Id && v.InvalidatedAt == null, ct);
+        var currentVerificationJson = await db.MappingVerifications.AsNoTracking()
+            .Where(v => v.ClientId == client.Id && v.InvalidatedAt == null)
+            .OrderByDescending(v => v.VerifiedAt)
+            .Select(v => v.VerifiedLinksJson)
+            .FirstOrDefaultAsync(ct);
+        var activeRequiredLinks = await db.IdentityLinks.AsNoTracking()
+            .Where(l => l.ClientId == client.Id
+                        && l.InvalidatedAt == null
+                        && ((l.System == ExternalSystem.Stripe
+                             && (l.Kind == LinkKind.Customer || l.Kind == LinkKind.Subscription))
+                            || (l.System == ExternalSystem.Meta && l.Kind == LinkKind.Campaign)
+                            || (l.System == ExternalSystem.Ghl && l.Kind == LinkKind.Contact)))
+            .Select(l => new { l.Id, l.LinkVersion })
+            .ToListAsync(ct);
+        var mappingVerified = MappingVerificationCoverage.PinsAll(
+            currentVerificationJson,
+            activeRequiredLinks.Select(l => (l.Id, l.LinkVersion)));
 
         return PromotionLadder.Assess(
             client.EnforcementMode, assistSince, uncleanDays, exercised, mappingVerified, killEngaged, now, _threshold);

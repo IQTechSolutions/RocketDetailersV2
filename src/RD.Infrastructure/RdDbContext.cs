@@ -22,6 +22,7 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
 {
     public DbSet<Client> Clients => Set<Client>();
     public DbSet<ClientMergeAudit> ClientMergeAudits => Set<ClientMergeAudit>();
+    public DbSet<StripeCustomerPreferenceChange> StripeCustomerPreferenceChanges => Set<StripeCustomerPreferenceChange>();
     public DbSet<ConvertIntent> ConvertIntents => Set<ConvertIntent>();
     public DbSet<TrialPeriod> TrialPeriods => Set<TrialPeriod>();
     public DbSet<IdentityLink> IdentityLinks => Set<IdentityLink>();
@@ -71,6 +72,7 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
             // instead — silently un-Master-ing the import path. Entity-level default keeps Master persistable.
             e.Property(x => x.AccountType).HasConversion<string>().HasMaxLength(10);
             e.Property(x => x.EnforcementMode).HasConversion<string>().HasMaxLength(10);
+            e.Property(x => x.PreferredStripeCustomerId).HasMaxLength(100);
             e.Property(x => x.ExpectedAmount).HasPrecision(19, 4);
             e.Property(x => x.ArrangementStatus).HasConversion<string>().HasMaxLength(15);
             e.Property(x => x.RowVersion).IsRowVersion();
@@ -83,6 +85,20 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
             e.Property(x => x.ReversedBy).HasMaxLength(100);
             // Reversal looks up the live (un-reversed) audit for a duplicate.
             e.HasIndex(x => new { x.DuplicateId, x.ReversedAt });
+        });
+
+        b.Entity<StripeCustomerPreferenceChange>(e =>
+        {
+            e.Property(x => x.PreviousStripeCustomerId).HasMaxLength(100);
+            e.Property(x => x.PreferredStripeCustomerId).HasMaxLength(100);
+            e.Property(x => x.ChangedBy).HasMaxLength(100);
+            e.Property(x => x.Reason).HasMaxLength(1000);
+            e.HasOne(x => x.Client).WithMany(c => c.StripeCustomerPreferenceChanges)
+                .HasForeignKey(x => x.ClientId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<InvestigationItem>().WithMany()
+                .HasForeignKey(x => x.InvestigationItemId).OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(x => new { x.ClientId, x.ChangedAt });
+            e.HasIndex(x => x.InvestigationItemId);
         });
 
         b.Entity<ConvertIntent>(e =>

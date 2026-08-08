@@ -65,38 +65,49 @@
                         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
                             <MudText Typo="Typo.body2" Style="font-weight:600;">@slot.Label</MudText>
                             <HelpHint Text="@slot.HelpText" />
-                            @if (slot.Present && slot.Active!.Verified)
+                            @if (slot.ActiveLinks.Count > 1)
                             {
-                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success">verified</MudChip>
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@slot.ActiveLinks.Count linked</MudChip>
                             }
                         </MudStack>
                         @if (slot.Present)
                         {
-                            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">
-                                <code style="font-size:.72rem;">@slot.Active!.ExternalId</code> · v@slot.Active!.LinkVersion
-                                @if (!string.IsNullOrEmpty(slot.Active!.ExternalUrl))
-                                {
-                                    <MudTooltip Arrow="true" Text="@VendorLinks.Label(slot.System)">
-                                        <MudIconButton Href="@slot.Active!.ExternalUrl" Target="_blank" rel="noopener noreferrer"
-                                                       Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small"
-                                                       aria-label="@VendorLinks.Label(slot.System)" />
-                                    </MudTooltip>
-                                }
-                            </MudText>
-                            <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">@slot.Active!.Evidence</MudText>
+                            @foreach (var link in slot.ActiveLinks)
+                            {
+                                <div class="mb-1">
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">
+                                        <code style="font-size:.72rem;">@link.ExternalId</code> · v@link.LinkVersion
+                                        @if (link.Verified)
+                                        {
+                                            <span> · verified</span>
+                                        }
+                                        @if (!string.IsNullOrEmpty(link.ExternalUrl))
+                                        {
+                                            <MudTooltip Arrow="true" Text="@VendorLinks.Label(slot.System)">
+                                                <MudIconButton Href="@link.ExternalUrl" Target="_blank" rel="noopener noreferrer"
+                                                               Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small"
+                                                               aria-label="@($"{VendorLinks.Label(slot.System)} {link.ExternalId}")" />
+                                            </MudTooltip>
+                                        }
+                                    </MudText>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">@link.Evidence</MudText>
+                                </div>
+                            }
                         }
                         else
                         {
                             <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">Not linked — the engine is blind here until it is.</MudText>
                         }
                     </div>
-                    <MudButton Size="Size.Small"
-                               Variant="@(slot.Present ? Variant.Outlined : Variant.Filled)"
-                               Color="@(slot.Present ? Color.Default : Color.Primary)"
-                               StartIcon="@(slot.Present ? Icons.Material.Filled.SwapHoriz : Icons.Material.Filled.AddLink)"
-                               OnClick="@(() => OnLink.InvokeAsync(slot))">
-                        @(slot.Present ? "Replace" : "Link")
-                    </MudButton>
+                    <AuthorizeView Roles="@Roles.OperatorRolesCsv" Context="linkAuth">
+                        <MudButton Size="Size.Small"
+                                   Variant="@(slot.Present ? Variant.Outlined : Variant.Filled)"
+                                   Color="@(slot.Present ? Color.Default : Color.Primary)"
+                                   StartIcon="@(slot.Present && IsSingleCardinality(slot) ? Icons.Material.Filled.SwapHoriz : Icons.Material.Filled.AddLink)"
+                                   OnClick="@(() => OnLink.InvokeAsync(slot))">
+                            @(slot.Present ? (IsSingleCardinality(slot) ? "Replace" : "Add another") : "Link")
+                        </MudButton>
+                    </AuthorizeView>
                 </MudStack>
             </MudPaper>
         }
@@ -183,6 +194,8 @@
 
     private bool _acknowledged;
     private string? _evidenceNote;
+
+    private static bool IsSingleCardinality(RequiredSlot slot) => slot.Kind == LinkKind.Contact;
 
     private async Task Verify()
     {

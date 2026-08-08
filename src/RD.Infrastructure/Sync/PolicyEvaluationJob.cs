@@ -78,11 +78,21 @@ public sealed class PolicyEvaluationJob(
             .ToDictionary(g => g.Key, g => g.Select(i => i.Id).ToArray());
 
         var evaluated = 0; var logged = 0; var investigationsCreated = 0; var investigationsResolved = 0; var staged = 0; var demoted = 0;
-        var demoteIds = new List<Guid>();
 
-        foreach (var client in clients)
+        foreach (var clientSnapshot in clients)
         {
             ct.ThrowIfCancellationRequested();
+
+            // Mapping, merge, billing, and dispatch all share this per-client
+            // fence. Re-read the client after winning it and keep it through the
+            // final action insert so a demotion cannot miss a stale Auto action
+            // that was still only tracked in this job.
+            await using var mutationFence = await ClientMutationFence.AcquireAsync(db, clientSnapshot.Id, ct);
+            var client = await db.Clients.FirstOrDefaultAsync(c =>
+                c.Id == clientSnapshot.Id
+                && c.AccountType == AccountType.Master
+                && c.MergedIntoClientId == null, ct);
+            if (client is null) continue;
 
             var state = await stateBuilder.BuildAsync(db, client, ctx, ct);
             var verdict = EligibilityPolicy.Evaluate(state);
@@ -136,10 +146,35 @@ public sealed class PolicyEvaluationJob(
                 investigationsCreated++;
             }
 
-            if (verdict.DemoteToShadow && client.EnforcementMode != EnforcementMode.Shadow)
+            if (verdict.DemoteToShadow)
             {
-                demoteIds.Add(client.Id);
-                demoted++;
+                if (client.EnforcementMode != EnforcementMode.Shadow)
+                {
+                    client.EnforcementMode = EnforcementMode.Shadow;
+                    demoted++;
+                }
+
+                var queuedActions = await db.OutboxActions
+                    .Where(action => action.ClientId == client.Id
+                                     && (action.Status == OutboxStatus.Pending
+                                         || action.Status == OutboxStatus.AwaitingApproval
+                                         || action.Status == OutboxStatus.Approved
+                                         || action.Status == OutboxStatus.Leased
+                                         || action.Status == OutboxStatus.Failed))
+                    .ToListAsync(ct);
+                foreach (var action in queuedActions)
+                {
+                    action.Status = OutboxStatus.Superseded;
+                    action.ActionVersion++;
+                    action.LeaseOwner = null;
+                    action.FencingToken = null;
+                    action.LeaseUntil = null;
+                    action.NextAttemptAt = null;
+                    action.LastError =
+                        "Superseded because policy demoted the client to Shadow; re-evaluate after the client is safely promoted again.";
+                }
+
+                await db.SaveChangesAsync(ct);
                 continue; // demoted clients don't stage this cycle
             }
 
@@ -150,14 +185,8 @@ public sealed class PolicyEvaluationJob(
                 await stager.StageAsync(db, client, state, verdict, killSwitch.Epoch, ct);
                 staged += db.ChangeTracker.Entries<OutboxAction>().Count() - before;
             }
-        }
 
-        await db.SaveChangesAsync(ct);
-
-        if (demoteIds.Count > 0)
-        {
-            await db.Clients.Where(c => demoteIds.Contains(c.Id))
-                .ExecuteUpdateAsync(s => s.SetProperty(c => c.EnforcementMode, EnforcementMode.Shadow), ct);
+            await db.SaveChangesAsync(ct);
         }
 
         logger.LogInformation(

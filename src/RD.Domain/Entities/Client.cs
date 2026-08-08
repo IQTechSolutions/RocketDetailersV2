@@ -24,6 +24,13 @@ public class Client
     public Guid? PackageId { get; set; }
     public Package? Package { get; set; }
 
+    /// <summary>
+    /// The linked Stripe customer used when the control plane creates a new
+    /// subscription. This is a preference only: every
+    /// active Stripe customer/subscription link remains monitored.
+    /// </summary>
+    public string? PreferredStripeCustomerId { get; set; }
+
     // Payment arrangement — the yardstick the balance policy measures against.
     // Inferred from the client's payment cadence; low-confidence inferences are
     // flagged for a human (ArrangementStatus.NeedsReview) rather than trusted.
@@ -48,6 +55,7 @@ public class Client
 
     public List<IdentityLink> IdentityLinks { get; set; } = [];
     public List<TrialPeriod> TrialPeriods { get; set; } = [];
+    public List<StripeCustomerPreferenceChange> StripeCustomerPreferenceChanges { get; set; } = [];
 }
 
 /// <summary>Trial state lives here, never on Client — multiple trials, extensions, and promotions must survive history.</summary>

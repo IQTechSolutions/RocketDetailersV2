@@ -61,6 +61,14 @@ public class ConvertIntent
     public string? DraftedActionJson { get; set; }
 
     /// <summary>
+    /// When the exact operator-approved billing draft was frozen before the first
+    /// Stripe write. While State is still Drafted, UpdatedAt doubles as a short
+    /// retry lease: a later attempt may resume the same idempotent write after the
+    /// lease expires, but it may never silently recompute a different target.
+    /// </summary>
+    public DateTimeOffset? BillingStartedAt { get; set; }
+
+    /// <summary>
     /// The client's GHL contact resolved at first-payment promotion — the target of the `close` tag
     /// write. Recorded even in Shadow so resolution is validated before anything fires. Null if the
     /// client has no linked GHL contact.
