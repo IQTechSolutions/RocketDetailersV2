@@ -20,14 +20,17 @@ public sealed class AppendOnlyInterceptor : SaveChangesInterceptor
         //   DunningAttempt — TriggeredAt (dispatcher) then VerifiedAt/FailureReason
         //                    (the delayed GHL delivery-verification job).
         //   WebhookInboxItem — status fields.
+        //   MetaShadowPrediction — EndedAt when the exact recommendation stops.
         // So they are NOT in StrictlyImmutable below.
         typeof(DunningAttempt), typeof(WebhookInboxItem),
+        typeof(MetaShadowPrediction),
+        typeof(MetaActivityFact),
         typeof(StripeCustomerPreferenceChange)
     ];
 
     private static readonly Type[] StrictlyImmutable =
     [
-        typeof(LedgerEntry), typeof(Decision),
+        typeof(LedgerEntry), typeof(Decision), typeof(MetaActivityFact),
         typeof(StripeCustomerPreferenceChange)
     ];
 

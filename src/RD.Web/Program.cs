@@ -18,7 +18,8 @@ using RD.Web.Components;
 using RD.Web.Identity;
 using RD.Web.Services;
 
-var builder = WebApplication.CreateBuilder(args);
+var runMetaShadowComparisonOnce = MetaShadowOneShotMode.IsRequested(args);
+var builder = WebApplication.CreateBuilder(MetaShadowOneShotMode.HostArguments(args));
 // A UTF-8 BOM can survive as the first character when Windows PowerShell 5.1
 // bridges a secret through JSON. SqlClient then sees an invisible prefix on
 // the first key and reports that otherwise-valid key as unsupported.
@@ -123,6 +124,27 @@ builder.Services.AddHangfire(cfg => cfg
 builder.Services.AddHangfireServer();
 
 var app = builder.Build();
+
+// Manual observer-only command. It deliberately exits before migrations,
+// startup repair, HTTP hosting, Hangfire startup, or recurring-job
+// registration. The normal deployment must have applied the schema first.
+if (runMetaShadowComparisonOnce)
+{
+    using var comparisonScope = app.Services.CreateScope();
+    var factory = comparisonScope.ServiceProvider.GetRequiredService<IDbContextFactory<RdDbContext>>();
+    await using var db = await factory.CreateDbContextAsync();
+    var pendingMigrations = (await db.Database.GetPendingMigrationsAsync()).ToArray();
+    if (pendingMigrations.Length > 0)
+    {
+        throw new InvalidOperationException(
+            "The live service must apply pending V2 migrations before the one-shot Meta shadow comparison can run.");
+    }
+
+    var comparison = comparisonScope.ServiceProvider.GetRequiredService<MetaShadowComparisonService>();
+    var report = await comparison.SyncAndCompareAsync(CancellationToken.None);
+    Console.WriteLine(MetaShadowOneShotMode.SerializeSummary(report));
+    return;
+}
 
 // Create the database (if absent) and bring the schema current before anything
 // touches it — Hangfire connects on startup, so a fresh/unmigrated database

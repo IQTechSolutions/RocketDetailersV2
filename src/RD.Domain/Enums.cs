@@ -54,6 +54,27 @@ public enum SyncRunStatus { Running = 0, Completed = 1, Failed = 2 }
 
 public enum MetaEntityType { Campaign = 0, AdSet = 1, Ad = 2 }
 
+/// <summary>Whether a shadow Meta recommendation had a real campaign action available at evaluation time.</summary>
+public enum MetaShadowTargetState
+{
+    Executable = 0,
+    AlreadySatisfied = 1,
+    NoActiveTarget = 2,
+    Unjudgeable = 3
+}
+
+/// <summary>How a shadow recommendation compares with Meta's observed campaign-status audit trail.</summary>
+public enum MetaShadowClassification
+{
+    Matched = 0,
+    PredictedOnly = 1,
+    ActualOnly = 2,
+    OppositeAction = 3,
+    AlreadySatisfied = 4,
+    NoActiveTarget = 5,
+    Unjudgeable = 6
+}
+
 public enum InvestigationStatus { Open = 0, Resolved = 1, Dismissed = 2 }
 
 public enum InvestigationKind

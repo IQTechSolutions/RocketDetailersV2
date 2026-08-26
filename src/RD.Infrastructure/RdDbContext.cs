@@ -31,6 +31,8 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
     public DbSet<PackageVersion> PackageVersions => Set<PackageVersion>();
     public DbSet<LedgerEntry> LedgerEntries => Set<LedgerEntry>();
     public DbSet<Decision> Decisions => Set<Decision>();
+    public DbSet<MetaShadowPrediction> MetaShadowPredictions => Set<MetaShadowPrediction>();
+    public DbSet<MetaActivityFact> MetaActivityFacts => Set<MetaActivityFact>();
     public DbSet<InvestigationItem> InvestigationItems => Set<InvestigationItem>();
     public DbSet<OutboxAction> OutboxActions => Set<OutboxAction>();
     public DbSet<DunningCase> DunningCases => Set<DunningCase>();
@@ -186,6 +188,42 @@ public class RdDbContext(DbContextOptions<RdDbContext> options) : IdentityDbCont
             e.Property(x => x.Mode).HasConversion<string>().HasMaxLength(10);
             e.Property(x => x.Reason).HasMaxLength(500);
             e.HasIndex(x => new { x.ClientId, x.EvaluatedAt });
+        });
+
+        b.Entity<MetaShadowPrediction>(e =>
+        {
+            e.Property(x => x.CampaignId).HasMaxLength(50);
+            e.Property(x => x.ProposedAction).HasConversion<string>().HasMaxLength(15);
+            e.Property(x => x.DesiredStatus).HasMaxLength(30);
+            e.Property(x => x.TargetState).HasConversion<string>().HasMaxLength(20);
+            e.HasOne<Client>().WithMany().HasForeignKey(x => x.ClientId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Decision>().WithMany().HasForeignKey(x => x.DecisionId).OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(x => new { x.ClientId, x.StartedAt });
+            e.HasIndex(x => new { x.CampaignId, x.ProposedAction, x.StartedAt });
+            e.HasIndex(x => new { x.ClientId, x.CampaignId, x.ProposedAction, x.TargetState })
+                .IsUnique()
+                .HasFilter("[EndedAt] IS NULL");
+        });
+
+        b.Entity<MetaActivityFact>(e =>
+        {
+            e.Property(x => x.SourceFingerprint).HasMaxLength(64).IsUnicode(false);
+            e.Property(x => x.AdAccountId).HasMaxLength(50);
+            e.Property(x => x.EventType).HasMaxLength(100);
+            e.Property(x => x.ObjectId).HasMaxLength(50);
+            e.Property(x => x.ObjectName).HasMaxLength(300);
+            e.Property(x => x.ObjectType).HasMaxLength(50);
+            e.Property(x => x.ActorId).HasMaxLength(100);
+            e.Property(x => x.ActorName).HasMaxLength(200);
+            e.Property(x => x.ApplicationId).HasMaxLength(100);
+            e.Property(x => x.ApplicationName).HasMaxLength(200);
+            e.Property(x => x.Tool).HasMaxLength(100);
+            e.Property(x => x.TranslatedEventType).HasMaxLength(300);
+            e.Property(x => x.OldStatus).HasMaxLength(30);
+            e.Property(x => x.NewStatus).HasMaxLength(30);
+            e.HasIndex(x => x.SourceFingerprint).IsUnique();
+            e.HasIndex(x => new { x.EventType, x.EventTime });
+            e.HasIndex(x => new { x.ObjectId, x.EventTime });
         });
 
         b.Entity<InvestigationItem>(e =>

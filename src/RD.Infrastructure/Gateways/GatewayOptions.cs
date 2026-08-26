@@ -33,6 +33,19 @@ public sealed class MetaOptions
     public int InsightsLookbackDays { get; set; } = 1;
 }
 
+/// <summary>
+/// Read-only shadow-comparison windows. These defaults affect only V2 audit
+/// ingestion and scoring; they do not enable or schedule any provider action.
+/// </summary>
+public sealed class MetaShadowComparisonOptions
+{
+    public const string SectionName = "MetaShadowComparison";
+
+    public int ActivityLookbackDays { get; set; } = 30;
+    public int ActivityOverlapHours { get; set; } = 24;
+    public int MatchWindowHours { get; set; } = 24;
+}
+
 public sealed class GhlLocationOptions
 {
     public string LocationId { get; set; } = "";

@@ -12,22 +12,23 @@ namespace RD.Infrastructure.Sync;
 /// The enforcement heartbeat. Every few minutes it builds a ClientState per
 /// master client (via the shared <see cref="ClientStateBuilder"/> the dispatcher
 /// also uses), runs the pure policy, records the verdict, and — for Assist/Auto
-/// clients — stages OutboxActions. Shadow clients only get a decision-log entry;
-/// their would-X verdicts drive the cockpit queue with no side effects.
+/// clients — stages OutboxActions. Shadow clients only get V2 audit entries;
+/// their would-X verdicts drive the cockpit queue with no provider side effects.
 ///
 ///   Client ──▶ ClientStateBuilder ──▶ EligibilityPolicy ──┬─▶ Decision (log)
 ///                                                          ├─▶ InvestigationItem (deduped)
 ///                                                          ├─▶ demote to Shadow (on drift)
 ///                                                          └─▶ ActionStager (Assist/Auto only)
 ///
-/// Decision logging is change-driven: a row is written when the verdict
-/// proposes an action/investigation OR the verdict changed from last time, so
-/// steady-state "nothing to do" is not re-logged every cycle.
+/// Decision logging is change-driven: a row is written only when the policy,
+/// mode, verdict, reason, or exact target set changes. Repeated heartbeats for
+/// the same recommendation do not inflate the audit log.
 /// </summary>
 public sealed class PolicyEvaluationJob(
     IDbContextFactory<RdDbContext> dbFactory,
     ClientStateBuilder stateBuilder,
     ActionStager stager,
+    MetaShadowPredictionRecorder predictionRecorder,
     IClock clock,
     ILogger<PolicyEvaluationJob> logger)
 {
@@ -117,13 +118,21 @@ public sealed class PolicyEvaluationJob(
             }
 
             var previous = latestByClient.GetValueOrDefault(client.Id);
+            var targetCampaignIdsJson = JsonSerializer.Serialize(
+                (verdict.TargetCampaignIds ?? [])
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(id => id, StringComparer.Ordinal));
             var changed = previous is null
+                || previous.PolicyVersion != EligibilityPolicy.Version
                 || previous.ProposedAction != verdict.Action
-                || previous.Reason != verdict.Reason;
+                || previous.Mode != client.EnforcementMode
+                || previous.Reason != verdict.Reason
+                || previous.TargetCampaignIdsJson != targetCampaignIdsJson;
 
-            if (verdict.Action != ProposedActionType.None || changed)
+            Decision decision;
+            if (changed)
             {
-                db.Decisions.Add(new Decision
+                decision = new Decision
                 {
                     Id = Guid.NewGuid(),
                     ClientId = client.Id,
@@ -132,10 +141,25 @@ public sealed class PolicyEvaluationJob(
                     StateSnapshotJson = JsonSerializer.Serialize(state),
                     ProposedAction = verdict.Action,
                     Mode = client.EnforcementMode,
+                    TargetCampaignIdsJson = targetCampaignIdsJson,
                     Reason = verdict.Reason,
-                });
+                };
+                db.Decisions.Add(decision);
                 logged++;
             }
+            else
+            {
+                decision = previous!;
+            }
+
+            await predictionRecorder.RecordAsync(
+                db,
+                client,
+                state,
+                verdict,
+                decision.Id,
+                now,
+                ct);
 
             if (verdict.Investigation is { } kind && openInvestigationSet.Add((client.Id, kind)))
             {

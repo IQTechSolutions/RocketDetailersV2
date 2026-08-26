@@ -35,8 +35,54 @@ public class Decision
     public required string StateSnapshotJson { get; set; }
     public ProposedActionType ProposedAction { get; set; }
     public EnforcementMode Mode { get; set; }
+    /// <summary>Canonical JSON array of exact campaign ids targeted by this verdict. Null only on pre-migration history.</summary>
+    public string? TargetCampaignIdsJson { get; set; }
     /// <summary>Human-readable evidence line for the cockpit "Why?" button.</summary>
     public string? Reason { get; set; }
+}
+
+/// <summary>
+/// One lifecycle incident for an exact campaign/action recommendation while a
+/// client is in Shadow. EndedAt closes the incident when the recommendation or
+/// target state changes; repeated policy heartbeats do not create new rows.
+/// </summary>
+public class MetaShadowPrediction
+{
+    public Guid Id { get; set; }
+    public Guid ClientId { get; set; }
+    public Guid DecisionId { get; set; }
+    public string? CampaignId { get; set; }
+    public ProposedActionType ProposedAction { get; set; }
+    public required string DesiredStatus { get; set; }
+    public MetaShadowTargetState TargetState { get; set; }
+    public DateTimeOffset StartedAt { get; set; }
+    public DateTimeOffset? EndedAt { get; set; }
+}
+
+/// <summary>
+/// Immutable, idempotently-ingested fact from Meta's GET-only ad-account
+/// activity edge. SourceFingerprint replaces the missing stable activity id.
+/// </summary>
+public class MetaActivityFact
+{
+    public Guid Id { get; set; }
+    public required string SourceFingerprint { get; set; }
+    public required string AdAccountId { get; set; }
+    public DateTimeOffset EventTime { get; set; }
+    public required string EventType { get; set; }
+    public required string ObjectId { get; set; }
+    public string? ObjectName { get; set; }
+    public string? ObjectType { get; set; }
+    public string? ActorId { get; set; }
+    public string? ActorName { get; set; }
+    public string? ApplicationId { get; set; }
+    public string? ApplicationName { get; set; }
+    public string? Tool { get; set; }
+    public string? TranslatedEventType { get; set; }
+    public string? OldStatus { get; set; }
+    public string? NewStatus { get; set; }
+    public string? ExtraDataJson { get; set; }
+    public DateTimeOffset RecordedAt { get; set; }
 }
 
 /// <summary>Needs-investigation work queue — drift becomes human work, not silence.</summary>

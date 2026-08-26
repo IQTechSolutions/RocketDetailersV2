@@ -457,6 +457,120 @@ public sealed class PolicyEvaluationJobTests : IDisposable
         state.HasNewFailedCharge.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task Repeated_shadow_pause_heartbeat_creates_one_decision_and_one_executable_prediction()
+    {
+        var clientId = EnforcementSeed.SeedMappedClient(
+            _db, subscriptionStatus: "canceled", campaignEffectiveStatus: "ACTIVE", Now);
+        await using (var seed = _db.CreateContext())
+        {
+            (await seed.Clients.SingleAsync(client => client.Id == clientId)).EnforcementMode = EnforcementMode.Shadow;
+            await seed.SaveChangesAsync();
+        }
+
+        var job = CreateJob();
+        await job.RunAsync(CancellationToken.None);
+        _clock.UtcNow = Now.AddMinutes(5);
+        await job.RunAsync(CancellationToken.None);
+
+        await using var assert = _db.CreateContext();
+        var decision = await assert.Decisions.SingleAsync(decision => decision.ClientId == clientId);
+        decision.ProposedAction.Should().Be(ProposedActionType.Pause);
+        decision.TargetCampaignIdsJson.Should().Be($"[\"{EnforcementSeed.CampaignId}\"]");
+        var prediction = await assert.MetaShadowPredictions.SingleAsync(prediction => prediction.ClientId == clientId);
+        prediction.DecisionId.Should().Be(decision.Id);
+        prediction.CampaignId.Should().Be(EnforcementSeed.CampaignId);
+        prediction.ProposedAction.Should().Be(ProposedActionType.Pause);
+        prediction.TargetState.Should().Be(MetaShadowTargetState.Executable);
+        prediction.EndedAt.Should().BeNull();
+        (await assert.Clients.FindAsync(clientId))!.EnforcementMode.Should().Be(EnforcementMode.Shadow);
+        assert.OutboxActions.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Shadow_pause_with_already_paused_campaign_is_recorded_but_not_executable()
+    {
+        var clientId = EnforcementSeed.SeedMappedClient(
+            _db, subscriptionStatus: "canceled", campaignEffectiveStatus: "PAUSED", Now);
+        await using (var seed = _db.CreateContext())
+        {
+            (await seed.Clients.SingleAsync(client => client.Id == clientId)).EnforcementMode = EnforcementMode.Shadow;
+            await seed.SaveChangesAsync();
+        }
+
+        await CreateJob().RunAsync(CancellationToken.None);
+
+        await using var assert = _db.CreateContext();
+        var decision = await assert.Decisions.SingleAsync(decision => decision.ClientId == clientId);
+        decision.TargetCampaignIdsJson.Should().Be("[]");
+        var prediction = await assert.MetaShadowPredictions.SingleAsync(prediction => prediction.ClientId == clientId);
+        prediction.CampaignId.Should().Be(EnforcementSeed.CampaignId);
+        prediction.TargetState.Should().Be(MetaShadowTargetState.AlreadySatisfied);
+        assert.MetaShadowPredictions.Should().NotContain(row =>
+            row.ClientId == clientId && row.TargetState == MetaShadowTargetState.Executable);
+        assert.OutboxActions.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Shadow_prediction_incident_closes_when_the_campaign_reaches_the_desired_state()
+    {
+        var clientId = EnforcementSeed.SeedMappedClient(
+            _db, subscriptionStatus: "canceled", campaignEffectiveStatus: "ACTIVE", Now);
+        await using (var seed = _db.CreateContext())
+        {
+            (await seed.Clients.SingleAsync(client => client.Id == clientId)).EnforcementMode = EnforcementMode.Shadow;
+            await seed.SaveChangesAsync();
+        }
+
+        await CreateJob().RunAsync(CancellationToken.None);
+        var reachedDesiredStateAt = Now.AddMinutes(5);
+        await using (var seed = _db.CreateContext())
+        {
+            var campaign = await seed.MetaCampaigns.SingleAsync();
+            campaign.Status = "PAUSED";
+            campaign.EffectiveStatus = "PAUSED";
+            campaign.SourceSyncedAt = reachedDesiredStateAt;
+            seed.SyncRuns.Add(CompletedSync(ExternalSystem.Meta, reachedDesiredStateAt));
+            await seed.SaveChangesAsync();
+        }
+
+        _clock.UtcNow = reachedDesiredStateAt;
+        await CreateJob().RunAsync(CancellationToken.None);
+
+        await using var assert = _db.CreateContext();
+        var predictions = await assert.MetaShadowPredictions
+            .Where(prediction => prediction.ClientId == clientId)
+            .OrderBy(prediction => prediction.StartedAt)
+            .ToListAsync();
+        predictions.Should().HaveCount(2);
+        predictions[0].TargetState.Should().Be(MetaShadowTargetState.Executable);
+        predictions[0].EndedAt.Should().Be(reachedDesiredStateAt);
+        predictions[1].TargetState.Should().Be(MetaShadowTargetState.AlreadySatisfied);
+        predictions[1].EndedAt.Should().BeNull();
+        assert.OutboxActions.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Shadow_pause_without_a_campaign_snapshot_is_recorded_as_no_active_target()
+    {
+        var clientId = EnforcementSeed.SeedMappedClient(
+            _db, subscriptionStatus: "canceled", campaignEffectiveStatus: "ACTIVE", Now);
+        await using (var seed = _db.CreateContext())
+        {
+            (await seed.Clients.SingleAsync(client => client.Id == clientId)).EnforcementMode = EnforcementMode.Shadow;
+            seed.MetaCampaigns.Remove(await seed.MetaCampaigns.SingleAsync());
+            await seed.SaveChangesAsync();
+        }
+
+        await CreateJob().RunAsync(CancellationToken.None);
+
+        await using var assert = _db.CreateContext();
+        var prediction = await assert.MetaShadowPredictions.SingleAsync(prediction => prediction.ClientId == clientId);
+        prediction.CampaignId.Should().BeNull();
+        prediction.TargetState.Should().Be(MetaShadowTargetState.NoActiveTarget);
+        assert.OutboxActions.Should().BeEmpty();
+    }
+
     private async Task<(Guid ClientId, Guid PolicyItemId)> SeedOpenPolicyExternalPauseAsync()
     {
         var clientId = EnforcementSeed.SeedMappedClient(
@@ -497,6 +611,7 @@ public sealed class PolicyEvaluationJobTests : IDisposable
             factory,
             new ClientStateBuilder(_clock, options),
             new ActionStager(_clock, options),
+            new MetaShadowPredictionRecorder(),
             _clock,
             NullLogger<PolicyEvaluationJob>.Instance);
     }

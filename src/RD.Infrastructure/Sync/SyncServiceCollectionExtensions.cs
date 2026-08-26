@@ -19,6 +19,7 @@ public static class SyncServiceCollectionExtensions
     {
         services.Configure<StripeOptions>(config.GetSection(StripeOptions.SectionName));
         services.Configure<MetaOptions>(config.GetSection(MetaOptions.SectionName));
+        services.Configure<MetaShadowComparisonOptions>(config.GetSection(MetaShadowComparisonOptions.SectionName));
         services.Configure<GhlOptions>(config.GetSection(GhlOptions.SectionName));
         services.Configure<SafetyOptions>(config.GetSection(SafetyOptions.SectionName));
         services.Configure<EnforcementOptions>(config.GetSection(EnforcementOptions.SectionName));
@@ -32,10 +33,13 @@ public static class SyncServiceCollectionExtensions
         // directly against WireMock with a plain HttpClient.
         services.AddHttpClient<IStripeGateway, StripeGateway>();
         services.AddHttpClient<IMetaAdsGateway, MetaAdsGateway>();
+        services.AddHttpClient<IMetaActivityReader, MetaActivityReader>();
         services.AddHttpClient<IGhlGateway, GhlGateway>();
 
         services.TryAddScoped<ClientStateBuilder>();
         services.TryAddScoped<ActionStager>();
+        services.TryAddScoped<MetaShadowPredictionRecorder>();
+        services.TryAddScoped<MetaShadowComparisonService>();
         services.TryAddScoped<OutboxDispatcher>();
         services.TryAddScoped<ApprovalService>();
         services.TryAddScoped<KillSwitchService>();

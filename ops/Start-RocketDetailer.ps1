@@ -1,3 +1,7 @@
+param(
+    [switch] $MetaShadowCompareOnce
+)
+
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
@@ -30,8 +34,16 @@ if (Test-Path -LiteralPath $dotnetEntry -PathType Leaf) {
     [Environment]::SetEnvironmentVariable('ASPNETCORE_URLS', 'http://127.0.0.1:3000', 'Process')
 
     Set-Location -LiteralPath $current
-    & $dotnetEntry
+    $entryArguments = @()
+    if ($MetaShadowCompareOnce) {
+        $entryArguments += '--meta-shadow-compare-once'
+    }
+    & $dotnetEntry @entryArguments
     exit $LASTEXITCODE
+}
+
+if ($MetaShadowCompareOnce) {
+    throw 'The active release does not contain the .NET one-shot Meta shadow comparison command.'
 }
 
 # Legacy Node release fallback. Keep this branch until every retained rollback
